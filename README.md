@@ -22,7 +22,7 @@ Built on top of [BDK](https://github.com/bitcoindevkit/bdk) and [rust-miniscript
 
 ## Quickstart
 
-> Detailed deployment notes are in [`docs/OPERATING.md`](docs/OPERATING.md). Integration guide for client code is in [`docs/INTEGRATING.md`](docs/INTEGRATING.md).
+> Architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Operating: [`docs/OPERATING.md`](docs/OPERATING.md). Client integration: [`docs/INTEGRATING.md`](docs/INTEGRATING.md). Security: [`SECURITY.md`](SECURITY.md).
 
 ### With Docker (recommended)
 
@@ -79,7 +79,8 @@ walletrs/
 │   └── liana/
 ├── proto/
 │   └── walletrpc.proto
-├── docs/              # operator + integrator documentation (TBD)
+├── docs/              # ARCHITECTURE, OPERATING, INTEGRATING
+├── SECURITY.md
 ├── LICENSE
 └── README.md
 ```
