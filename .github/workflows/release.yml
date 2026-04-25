@@ -12,8 +12,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  create-release:
+    name: create github release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Auto-detects prerelease from the tag (any tag with `-` is treated as
+      # prerelease, e.g. v0.1.0-rc1). The release body is empty here; the
+      # release-notes job at the end of the workflow fills it in with the
+      # PR-derived auto-notes once binaries + docker have all uploaded.
+      - uses: taiki-e/create-gh-release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   binaries:
     name: build binary (${{ matrix.target }})
+    needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -51,6 +65,7 @@ jobs:
 
   docker:
     name: docker push
+    needs: create-release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
