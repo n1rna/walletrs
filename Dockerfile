@@ -38,14 +38,19 @@ COPY proto ./proto
 RUN cargo chef cook --release --recipe-path /tmp/recipe.json
 
 # ── Builder: compile walletrs on top of the cached deps ──────────────────
-# `cargo clean -p walletrs` invalidates the stub-source artifacts cargo-chef
-# left behind in the cacher stage so build.rs is forced to re-run with the
-# real source — without this, OUT_DIR points at a hash that never wrote
-# walletrpc.rs and `tonic::include_proto!` fails.
+# Re-copy the real workspace + member Cargo.toml's on top of the stubs
+# cargo-chef wrote during `cook`. cargo-chef rewrites versions to 0.0.1
+# while cooking; if we left those stubs in place the builder stage would
+# compile walletrs as 0.0.1 with the real source against a target/ keyed
+# to the stub manifest — `tonic::include_proto!` then can't find
+# walletrpc.rs in OUT_DIR. Re-copying restores the real version + source
+# so cargo recomputes hashes and re-runs build.rs cleanly.
 FROM cacher AS builder
-COPY crates/server/src ./crates/server/src
-RUN cargo clean -p walletrs \
- && cargo build --release --bin walletrs \
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY contrib ./contrib
+COPY proto ./proto
+RUN cargo build --release --bin walletrs \
  && cp target/release/walletrs /usr/local/bin/walletrs
 
 # ── Runtime ──────────────────────────────────────────────────────────────
