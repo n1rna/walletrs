@@ -10,6 +10,7 @@ All notable changes to this project will be documented here. The format follows 
 - Multi-stage `Dockerfile` (cargo-chef) producing a `debian:bookworm-slim` runtime image.
 - `docker-compose.yml` regtest stack (`lncm/bitcoind:v25.0` + `mempool/electrs:latest` + walletrs).
 - GitHub Actions: CI (`fmt`, `clippy`, `test`, docker build) on every push/PR; release workflow (Linux x86_64 + macOS x86_64/arm64 binaries + multi-arch Docker push to GHCR) on `v*` tags.
+- Documentation: `docs/ARCHITECTURE.md`, `docs/OPERATING.md`, `docs/INTEGRATING.md`, top-level `SECURITY.md`.
 
 ### Changed
 
