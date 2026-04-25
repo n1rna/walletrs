@@ -45,7 +45,8 @@ jobs:
         with:
           bin: walletrs,walletrs-cli
           target: ${{ matrix.target }}
-          archive: $bin-$tag-$target
+          # `$bin` is single-bin only; bundle both bins under one archive.
+          archive: walletrs-$tag-$target
           token: ${{ secrets.GITHUB_TOKEN }}
 
   docker:
