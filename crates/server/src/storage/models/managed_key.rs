@@ -133,7 +133,7 @@ impl StoredManagedKey {
         key_type_filter: Option<&str>,
     ) -> StorageResult<Vec<Self>> {
         // Since ManagedKeys scope requires user_id, we can only list for a specific user
-        let user_id = user_id_filter.ok_or_else(|| {
+        let _user_id = user_id_filter.ok_or_else(|| {
             crate::storage::StorageError::PathGeneration(
                 "user_id_filter is required when using ManagedKeys scope".to_string(),
             )

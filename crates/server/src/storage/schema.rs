@@ -65,12 +65,12 @@ impl Schema {
             indexes: Vec::new(),
         }
     }
-    
+
     pub fn add_field(mut self, field: FieldSchema) -> Self {
         self.fields.push(field);
         self
     }
-    
+
     pub fn add_index(mut self, index: IndexSchema) -> Self {
         self.indexes.push(index);
         self
@@ -87,7 +87,7 @@ impl FieldSchema {
             validation: None,
         }
     }
-    
+
     pub fn with_validation(mut self, validation: FieldValidation) -> Self {
         self.validation = Some(validation);
         self

@@ -18,10 +18,10 @@ use bdk_electrum::electrum_client;
 use bdk_electrum::BdkElectrumClient;
 use bdk_wallet::bitcoin::{Address as BitcoinAddress, Psbt};
 use bdk_wallet::chain::ChainPosition;
-use bdk_wallet::{KeychainKind, SignOptions};
-use miniscript::psbt::PsbtExt;
+use bdk_wallet::KeychainKind;
 use hex;
 use log::error;
+use miniscript::psbt::PsbtExt;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use tonic::{Request, Response, Status};
@@ -93,7 +93,7 @@ pub async fn get_wallet_transactions(
                             .input
                             .iter()
                             .map(|input| TransactionInput {
-                                prev_vout: input.previous_output.vout as u32,
+                                prev_vout: input.previous_output.vout,
                                 prev_txid: input.previous_output.txid.to_string(),
                                 address: match wallet.derivation_of_spk(input.script_sig.clone()) {
                                     Some((keychain, derivation_index)) => wallet
@@ -169,7 +169,7 @@ pub async fn get_wallet_utxos(
 
                     Utxo {
                         txid: txo.outpoint.txid.to_string(),
-                        vout: txo.outpoint.vout as u32,
+                        vout: txo.outpoint.vout,
                         address: wallet
                             .peek_address(utxo.keychain, utxo.derivation_index)
                             .address
@@ -414,7 +414,7 @@ pub async fn finalize_wallet_transaction(
 
     match bdk_manager.load_wallet(&req.wallet_id) {
         Ok(wallet_result) => {
-            let wallet = wallet_result.wallet;
+            let _wallet = wallet_result.wallet;
             let mut _db = wallet_result.store;
 
             // Get the signed PSBT from the database
@@ -435,7 +435,10 @@ pub async fn finalize_wallet_transaction(
             log::info!(
                 "Combining {} signed PSBTs from devices: {:?}",
                 signed_psbts.len(),
-                signed_psbts.iter().map(|s| &s.device_fingerprint).collect::<Vec<_>>()
+                signed_psbts
+                    .iter()
+                    .map(|s| &s.device_fingerprint)
+                    .collect::<Vec<_>>()
             );
             for psbt in signed_psbts
                 .iter()
@@ -472,10 +475,7 @@ pub async fn finalize_wallet_transaction(
                     true
                 }
                 Err(errors) => {
-                    log::warn!(
-                        "⚠️ miniscript finalize_mut returned errors: {:?}",
-                        errors
-                    );
+                    log::warn!("⚠️ miniscript finalize_mut returned errors: {:?}", errors);
                     false
                 }
             };
@@ -652,14 +652,13 @@ pub async fn broadcast_wallet_transaction(
                 BdkElectrumClient::new(electrum_client::Client::new(CONFIG.electrs_url()).unwrap());
 
             // Get the finalized PSBT (must have been finalized via finalize_wallet_transaction)
-            let psbt_str = db::get_finalized_psbt(&req.wallet_id, &req.txid)
-                .map_err(|e| {
-                    Status::failed_precondition(format!(
-                        "No finalized PSBT found for wallet {} and txid {}. \
+            let psbt_str = db::get_finalized_psbt(&req.wallet_id, &req.txid).map_err(|e| {
+                Status::failed_precondition(format!(
+                    "No finalized PSBT found for wallet {} and txid {}. \
                          Call finalize_wallet_transaction first. Error: {}",
-                        req.wallet_id, req.txid, e
-                    ))
-                })?;
+                    req.wallet_id, req.txid, e
+                ))
+            })?;
 
             log::info!("📡 Broadcasting PSBT for txid: {}", req.txid);
             log::debug!(
@@ -689,13 +688,4 @@ pub async fn broadcast_wallet_transaction(
         }
         Err(_) => Err(Status::not_found("Wallet not found")),
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bdk_wallet::{bitcoin, KeychainKind, Wallet};
-    use bitcoin::{Address, Amount, Network};
-    use std::collections::BTreeMap;
-    use std::str::FromStr;
 }

@@ -77,7 +77,14 @@ fn classifies_single_sig() {
     let f = make_key("device-1", 1);
     let spec = WalletSpec {
         network: Network::Testnet,
-        conditions: vec![cond("primary", true, 0, PolicyType::Single, 1, &["device-1"])],
+        conditions: vec![cond(
+            "primary",
+            true,
+            0,
+            PolicyType::Single,
+            1,
+            &["device-1"],
+        )],
         managed_keys: keys(&[&f]),
         preferred_script_type: PreferredScriptType::Auto,
     };
@@ -96,7 +103,14 @@ fn classifies_single_sig_taproot_when_preferred() {
     let f = make_key("device-1", 1);
     let spec = WalletSpec {
         network: Network::Testnet,
-        conditions: vec![cond("primary", true, 0, PolicyType::Single, 1, &["device-1"])],
+        conditions: vec![cond(
+            "primary",
+            true,
+            0,
+            PolicyType::Single,
+            1,
+            &["device-1"],
+        )],
         managed_keys: keys(&[&f]),
         preferred_script_type: PreferredScriptType::Taproot,
     };
@@ -234,7 +248,14 @@ fn descriptor_pair_for_single_sig_has_no_liana() {
     let f = make_key("device-1", 1);
     let spec = WalletSpec {
         network: Network::Testnet,
-        conditions: vec![cond("primary", true, 0, PolicyType::Single, 1, &["device-1"])],
+        conditions: vec![cond(
+            "primary",
+            true,
+            0,
+            PolicyType::Single,
+            1,
+            &["device-1"],
+        )],
         managed_keys: keys(&[&f]),
         preferred_script_type: PreferredScriptType::Auto,
     };

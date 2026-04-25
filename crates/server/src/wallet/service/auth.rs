@@ -120,10 +120,7 @@ where
                 return inner.call(req).await;
             }
 
-            warn!(
-                "rejected unauthenticated request to {}",
-                req.uri().path()
-            );
+            warn!("rejected unauthenticated request to {}", req.uri().path());
             Ok(Status::unauthenticated("missing or invalid bearer token").to_http())
         })
     }

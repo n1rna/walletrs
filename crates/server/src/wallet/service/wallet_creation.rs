@@ -57,10 +57,7 @@ pub async fn create_generic_wallet(
         .map_err(|e| Status::internal(format!("Wallet creation failed: {}", e)))?;
 
     if let Some(ref liana_desc) = result.liana_descriptor {
-        log::info!(
-            "Persisting Liana descriptor for wallet {}",
-            req.wallet_id
-        );
+        log::info!("Persisting Liana descriptor for wallet {}", req.wallet_id);
         let updated_wallet = stored_wallet.with_liana_descriptor(liana_desc);
         if let Err(e) = updated_wallet.store() {
             log::warn!("Failed to persist liana descriptor: {}", e);
@@ -145,13 +142,13 @@ fn load_managed_keys(
 }
 
 fn lookup_managed_key(user_id: &str, device_id: &str) -> Result<StoredManagedKey, String> {
-    if let Some(key) = db::get_managed_key(user_id, device_id, "customer")
-        .map_err(|e| e.to_string())?
+    if let Some(key) =
+        db::get_managed_key(user_id, device_id, "customer").map_err(|e| e.to_string())?
     {
         return Ok(key);
     }
-    if let Some(key) = db::get_managed_key(user_id, device_id, "system")
-        .map_err(|e| e.to_string())?
+    if let Some(key) =
+        db::get_managed_key(user_id, device_id, "system").map_err(|e| e.to_string())?
     {
         return Ok(key);
     }

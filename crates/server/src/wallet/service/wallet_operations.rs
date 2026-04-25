@@ -56,10 +56,10 @@ pub async fn update_wallet(
                 .persist(&mut _db)
                 .map_err(|e| Status::internal(format!("Failed to persist wallet: {}", e)))?;
 
-            return Ok(Response::new(UpdateWalletResponse {
+            Ok(Response::new(UpdateWalletResponse {
                 wallet_id: req.wallet_id,
                 balance: wallet.balance().total().to_string(),
-            }));
+            }))
         }
         Err(_) => Err(Status::not_found("Wallet not found")),
     }
@@ -75,10 +75,10 @@ pub async fn get_wallet(
     match bdk_manager.load_wallet(&req.wallet_id) {
         Ok(wallet_result) => {
             let wallet = wallet_result.wallet;
-            return Ok(Response::new(GetWalletResponse {
+            Ok(Response::new(GetWalletResponse {
                 wallet_id: req.wallet_id,
                 balance: wallet.balance().total().to_string(),
-            }));
+            }))
         }
         Err(_) => Err(Status::not_found("Wallet not found")),
     }

@@ -105,7 +105,14 @@ mod tests {
         BTreeMap::new()
     }
 
-    fn cond(id: &str, primary: bool, timelock: u16, policy: PolicyType, threshold: usize, keys: &[&str]) -> SpendingCondition {
+    fn cond(
+        id: &str,
+        primary: bool,
+        timelock: u16,
+        policy: PolicyType,
+        threshold: usize,
+        keys: &[&str],
+    ) -> SpendingCondition {
         SpendingCondition {
             id: id.to_string(),
             is_primary: primary,

@@ -10,7 +10,7 @@ static STORAGE_MANAGER: OnceLock<StorageManager> = OnceLock::new();
 fn convert_storage_error(e: crate::storage::StorageError) -> std::io::Error {
     match e {
         crate::storage::StorageError::Io(io_err) => io_err,
-        _ => std::io::Error::new(std::io::ErrorKind::Other, format!("Storage error: {}", e)),
+        _ => std::io::Error::other(format!("Storage error: {}", e)),
     }
 }
 
@@ -21,8 +21,7 @@ pub fn get_storage_manager() -> &'static StorageManager {
     })
 }
 
-/// STORAGE INITIALIZATION
-///
+// STORAGE INITIALIZATION
 
 pub fn init_all_storage() -> Result<(), std::io::Error> {
     let storage_manager = get_storage_manager();
@@ -31,8 +30,7 @@ pub fn init_all_storage() -> Result<(), std::io::Error> {
         .map_err(convert_storage_error)
 }
 
-/// WALLET OPERATIONS (using StorageManager and StoredWallet)
-//
+// WALLET OPERATIONS (using StorageManager and StoredWallet)
 
 pub fn create_wallet(
     user_id: &str,

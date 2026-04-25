@@ -61,3 +61,16 @@ path = "src/lib.rs"
 
 [build-dependencies]
 tonic-build = "*"
+
+[lints.clippy]
+# `tonic::Status` is intentionally large; wrapping every Result in Box buys
+# nothing and bloats handler signatures.
+result_large_err = "allow"
+# Storage / managed-key constructors take many narrow fields by design;
+# bundling them into structs is a separate refactor and would touch every
+# call site.
+too_many_arguments = "allow"
+# Stylistic — keep explicit field names where they help readability.
+redundant_field_names = "allow"
+# Stylistic — nested `if` blocks sometimes read better than chained `&&`.
+collapsible_if = "allow"

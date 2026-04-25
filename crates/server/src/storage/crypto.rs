@@ -43,12 +43,10 @@ impl EnvelopeCipher {
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = XNonce::from_slice(&nonce_bytes);
 
-        let ciphertext = self.cipher.encrypt(nonce, plaintext).map_err(|e| {
-            StorageError::Io(io::Error::new(
-                io::ErrorKind::Other,
-                format!("AEAD encrypt: {}", e),
-            ))
-        })?;
+        let ciphertext = self
+            .cipher
+            .encrypt(nonce, plaintext)
+            .map_err(|e| StorageError::Io(io::Error::other(format!("AEAD encrypt: {}", e))))?;
 
         let mut out = Vec::with_capacity(HEADER_LEN + ciphertext.len());
         out.push(VERSION_V1);
@@ -72,12 +70,14 @@ impl EnvelopeCipher {
             )));
         }
         let nonce = XNonce::from_slice(&blob[1..HEADER_LEN]);
-        self.cipher.decrypt(nonce, &blob[HEADER_LEN..]).map_err(|e| {
-            StorageError::Io(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("AEAD decrypt: {}", e),
-            ))
-        })
+        self.cipher
+            .decrypt(nonce, &blob[HEADER_LEN..])
+            .map_err(|e| {
+                StorageError::Io(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("AEAD decrypt: {}", e),
+                ))
+            })
     }
 }
 

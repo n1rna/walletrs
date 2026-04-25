@@ -1,5 +1,5 @@
-use crate::storage::{Schema, Storable, Storage, StorageManager, StorageResult};
 use crate::storage::schema::{FieldSchema, FieldType, IndexSchema};
+use crate::storage::{Schema, Storable, Storage, StorageManager, StorageResult};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
@@ -70,8 +70,8 @@ impl StoredSignedPSBT {
                 storage.store(&key, self)
             }
             None => Err(crate::storage::StorageError::PathGeneration(
-                "StorageManager not set. Use with_storage_manager() first.".to_string()
-            ))
+                "StorageManager not set. Use with_storage_manager() first.".to_string(),
+            )),
         }
     }
 
@@ -95,7 +95,7 @@ impl StoredSignedPSBT {
                 signed_psbt._storage_manager = Some(storage_manager);
                 Ok(Some(signed_psbt))
             }
-            None => Ok(None)
+            None => Ok(None),
         }
     }
 
@@ -107,10 +107,13 @@ impl StoredSignedPSBT {
         let storage = storage_manager.signed_psbts(wallet_id)?;
         let filter_fn = |psbt: &Self| psbt.txid == txid;
         let results = storage.query(&filter_fn)?;
-        Ok(results.into_iter().map(|(_, mut value)| {
-            value._storage_manager = Some(storage_manager);
-            value
-        }).collect())
+        Ok(results
+            .into_iter()
+            .map(|(_, mut value)| {
+                value._storage_manager = Some(storage_manager);
+                value
+            })
+            .collect())
     }
 
     pub fn get_finalized_by_txid(
@@ -121,10 +124,13 @@ impl StoredSignedPSBT {
         let storage = storage_manager.signed_psbts(wallet_id)?;
         let filter_fn = |psbt: &Self| psbt.txid == txid && psbt.is_finalized;
         let results = storage.query(&filter_fn)?;
-        Ok(results.into_iter().map(|(_, mut value)| {
-            value._storage_manager = Some(storage_manager);
-            value
-        }).next())
+        Ok(results
+            .into_iter()
+            .map(|(_, mut value)| {
+                value._storage_manager = Some(storage_manager);
+                value
+            })
+            .next())
     }
 
     pub fn list_by_device(
@@ -135,10 +141,13 @@ impl StoredSignedPSBT {
         let storage = storage_manager.signed_psbts(wallet_id)?;
         let filter_fn = |psbt: &Self| psbt.device_fingerprint == device_fingerprint;
         let results = storage.query(&filter_fn)?;
-        Ok(results.into_iter().map(|(_, mut value)| {
-            value._storage_manager = Some(storage_manager);
-            value
-        }).collect())
+        Ok(results
+            .into_iter()
+            .map(|(_, mut value)| {
+                value._storage_manager = Some(storage_manager);
+                value
+            })
+            .collect())
     }
 
     pub fn list_finalized(
@@ -148,10 +157,13 @@ impl StoredSignedPSBT {
         let storage = storage_manager.signed_psbts(wallet_id)?;
         let filter_fn = |psbt: &Self| psbt.is_finalized;
         let results = storage.query(&filter_fn)?;
-        Ok(results.into_iter().map(|(_, mut value)| {
-            value._storage_manager = Some(storage_manager);
-            value
-        }).collect())
+        Ok(results
+            .into_iter()
+            .map(|(_, mut value)| {
+                value._storage_manager = Some(storage_manager);
+                value
+            })
+            .collect())
     }
 
     pub fn mark_finalized(&mut self) {
@@ -167,8 +179,8 @@ impl StoredSignedPSBT {
                 storage.store(&key, self)
             }
             None => Err(crate::storage::StorageError::PathGeneration(
-                "StorageManager not set. Use with_storage_manager() first.".to_string()
-            ))
+                "StorageManager not set. Use with_storage_manager() first.".to_string(),
+            )),
         }
     }
 
@@ -179,61 +191,65 @@ impl StoredSignedPSBT {
 
 impl Storable for StoredSignedPSBT {
     fn schema() -> Schema {
-        Schema::new("stored_signed_psbt", 1, "Stored signed PSBT data from devices")
-            .add_field(FieldSchema::new(
-                "txid",
-                FieldType::String,
-                true,
-                "Transaction ID"
-            ))
-            .add_field(FieldSchema::new(
-                "wallet_id",
-                FieldType::String,
-                true,
-                "Wallet ID this transaction belongs to"
-            ))
-            .add_field(FieldSchema::new(
-                "device_fingerprint",
-                FieldType::String,
-                true,
-                "Device fingerprint that signed this PSBT"
-            ))
-            .add_field(FieldSchema::new(
-                "psbt_data",
-                FieldType::String,
-                true,
-                "Base64 encoded signed PSBT data"
-            ))
-            .add_field(FieldSchema::new(
-                "created_at",
-                FieldType::Integer,
-                true,
-                "Creation timestamp"
-            ))
-            .add_field(FieldSchema::new(
-                "is_finalized",
-                FieldType::Boolean,
-                true,
-                "Whether this PSBT is finalized"
-            ))
-            .add_index(IndexSchema::new(
-                "by_txid",
-                vec!["txid"],
-                false,
-                "Index by transaction ID"
-            ))
-            .add_index(IndexSchema::new(
-                "by_wallet_id",
-                vec!["wallet_id"],
-                false,
-                "Index by wallet ID"
-            ))
-            .add_index(IndexSchema::new(
-                "by_txid_and_device",
-                vec!["txid", "device_fingerprint"],
-                true,
-                "Unique index for transaction and device combination"
-            ))
+        Schema::new(
+            "stored_signed_psbt",
+            1,
+            "Stored signed PSBT data from devices",
+        )
+        .add_field(FieldSchema::new(
+            "txid",
+            FieldType::String,
+            true,
+            "Transaction ID",
+        ))
+        .add_field(FieldSchema::new(
+            "wallet_id",
+            FieldType::String,
+            true,
+            "Wallet ID this transaction belongs to",
+        ))
+        .add_field(FieldSchema::new(
+            "device_fingerprint",
+            FieldType::String,
+            true,
+            "Device fingerprint that signed this PSBT",
+        ))
+        .add_field(FieldSchema::new(
+            "psbt_data",
+            FieldType::String,
+            true,
+            "Base64 encoded signed PSBT data",
+        ))
+        .add_field(FieldSchema::new(
+            "created_at",
+            FieldType::Integer,
+            true,
+            "Creation timestamp",
+        ))
+        .add_field(FieldSchema::new(
+            "is_finalized",
+            FieldType::Boolean,
+            true,
+            "Whether this PSBT is finalized",
+        ))
+        .add_index(IndexSchema::new(
+            "by_txid",
+            vec!["txid"],
+            false,
+            "Index by transaction ID",
+        ))
+        .add_index(IndexSchema::new(
+            "by_wallet_id",
+            vec!["wallet_id"],
+            false,
+            "Index by wallet ID",
+        ))
+        .add_index(IndexSchema::new(
+            "by_txid_and_device",
+            vec!["txid", "device_fingerprint"],
+            true,
+            "Unique index for transaction and device combination",
+        ))
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -259,11 +275,26 @@ impl Storable for StoredSignedPSBT {
     fn get_indexable_fields(&self) -> HashMap<String, serde_json::Value> {
         let mut fields = HashMap::new();
 
-        fields.insert("txid".to_string(), serde_json::Value::String(self.txid.clone()));
-        fields.insert("wallet_id".to_string(), serde_json::Value::String(self.wallet_id.clone()));
-        fields.insert("device_fingerprint".to_string(), serde_json::Value::String(self.device_fingerprint.clone()));
-        fields.insert("created_at".to_string(), serde_json::Value::Number(serde_json::Number::from(self.created_at)));
-        fields.insert("is_finalized".to_string(), serde_json::Value::Bool(self.is_finalized));
+        fields.insert(
+            "txid".to_string(),
+            serde_json::Value::String(self.txid.clone()),
+        );
+        fields.insert(
+            "wallet_id".to_string(),
+            serde_json::Value::String(self.wallet_id.clone()),
+        );
+        fields.insert(
+            "device_fingerprint".to_string(),
+            serde_json::Value::String(self.device_fingerprint.clone()),
+        );
+        fields.insert(
+            "created_at".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(self.created_at)),
+        );
+        fields.insert(
+            "is_finalized".to_string(),
+            serde_json::Value::Bool(self.is_finalized),
+        );
 
         fields
     }

@@ -56,11 +56,12 @@ pub async fn create_system_managed_key(
     let fingerprint = tprv.fingerprint(&secp).to_string();
 
     // Format the keys with the derivation paths - same as CLI
-    let tprv_formatted = KeyUtils::format_key_with_fingerprint(&fingerprint, &tprv.to_string());
-    let tpub_formatted = KeyUtils::format_key_with_fingerprint(&fingerprint, &tpub.to_string());
+    let _tprv_formatted = KeyUtils::format_key_with_fingerprint(&fingerprint, &tprv.to_string());
+    let _tpub_formatted = KeyUtils::format_key_with_fingerprint(&fingerprint, &tpub.to_string());
 
     // Format xpub for Liana (with multipath derivation and full key origin)
-    let tpub_liana_format = KeyUtils::format_key_for_liana(&fingerprint, &primary_path.to_string(), &tpub.to_string());
+    let tpub_liana_format =
+        KeyUtils::format_key_for_liana(&fingerprint, &primary_path.to_string(), &tpub.to_string());
 
     // Store the system key with proper separation of root and account keys
     // xpriv/xpub: Root keys (m/) - for potential future derivations
@@ -70,12 +71,12 @@ pub async fn create_system_managed_key(
         &req.device_id,
         &key_name,
         &key_result.xprv.to_string(), // Store root xpriv (m/)
-        &key_result.xpub.to_string(),  // Store root xpub (m/)
+        &key_result.xpub.to_string(), // Store root xpub (m/)
         &fingerprint,
         &primary_path.to_string(),
         &key_result.words.join(" "),
-        &tprv.to_string(),        // Store account xpriv (m/84'/1'/0')
-        &tpub_liana_format,       // Store Liana-formatted account xpub
+        &tprv.to_string(),  // Store account xpriv (m/84'/1'/0')
+        &tpub_liana_format, // Store Liana-formatted account xpub
     ) {
         Ok(_) => Ok(Response::new(CreateSystemManagedKeysResponse {
             user_id: req.user_id,

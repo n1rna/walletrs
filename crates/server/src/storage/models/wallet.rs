@@ -1,7 +1,5 @@
 use crate::storage::schema::{FieldSchema, FieldType, FieldValidation, IndexSchema};
-use crate::storage::{
-    self, IndexableStorage, Schema, Storable, Storage, StorageManager, StorageResult,
-};
+use crate::storage::{IndexableStorage, Schema, Storable, Storage, StorageManager, StorageResult};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
@@ -154,7 +152,7 @@ impl StoredWallet {
         }
     }
 
-    pub fn list_by_user(&self, user_id: &str, active_only: bool) -> StorageResult<Vec<Self>> {
+    pub fn list_by_user(&self, _user_id: &str, active_only: bool) -> StorageResult<Vec<Self>> {
         match self._storage_manager {
             Some(storage_manager) => {
                 let filter_fn = |wallet: &Self| {
@@ -180,7 +178,7 @@ impl StoredWallet {
         }
     }
 
-    pub fn exists(&self, user_id: &str, wallet_id: &str) -> StorageResult<bool> {
+    pub fn exists(&self, _user_id: &str, wallet_id: &str) -> StorageResult<bool> {
         match self._storage_manager {
             Some(storage_manager) => {
                 let storage = storage_manager.wallets()?;
@@ -193,7 +191,7 @@ impl StoredWallet {
         }
     }
 
-    pub fn deactivate(&self, user_id: &str, wallet_id: &str) -> StorageResult<()> {
+    pub fn deactivate(&self, _user_id: &str, wallet_id: &str) -> StorageResult<()> {
         match self._storage_manager {
             Some(storage_manager) => {
                 let storage = storage_manager.wallets()?;
