@@ -6,6 +6,7 @@ All notable changes to this project will be documented here. The format follows 
 
 ### Added
 
+- **Sigvault agent (BYO walletrs).** Outbound reverse-tunnel client that lets a user-hosted walletrs instance pair with a cloud sigvault deployment. Pairing via one-shot token (`--sigvault-token` / `WALLETRS_SIGVAULT_TOKEN`) generates a local Ed25519 keypair (private key envelope-encrypted under `WALLETRS_KEK`) and exchanges it for a stable `agent_id`. Persistent bidirectional gRPC stream re-authenticates on every reconnect via signed challenge nonce. Operations from sigvault are dispatched through the same internal handlers as the local gRPC server — no parallel codegen path. Ships disabled by default; existing standalone deployments are unaffected. New `WalletrsAgent` service + envelope messages added to `proto/walletrpc.proto`.
 - Bearer-token gRPC auth interceptor (`Authorization: Bearer <token>`); auto-generates a token at first boot when `WALLETRS_AUTH_TOKEN` is unset and logs it once with a `STORE THIS` prefix. `WALLETRS_AUTH_DISABLED=1` opts out.
 - Multi-stage `Dockerfile` (cargo-chef) producing a `debian:bookworm-slim` runtime image.
 - `docker-compose.yml` regtest stack (`lncm/bitcoind:v25.0` + `mempool/electrs:latest` + walletrs).
