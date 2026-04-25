@@ -32,9 +32,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends protobuf-compiler
-      # Scope to the server crate so upstream-vendored contrib/liana doesn't
-      # police us on its own warnings; we don't modify that code.
-      - run: cargo clippy -p walletrs --all-targets -- -D warnings
+      # Strictness comes from `[lints]` in `crates/server/Cargo.toml` — that
+      # way the vendored `contrib/liana` crate isn't held to our standard.
+      # `--no-deps` keeps clippy quiet about transitive dep warnings too.
+      - run: cargo clippy -p walletrs --all-targets --no-deps
 
   test:
     name: cargo test

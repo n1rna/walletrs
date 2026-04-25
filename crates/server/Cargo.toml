@@ -62,7 +62,18 @@ path = "src/lib.rs"
 [build-dependencies]
 tonic-build = "*"
 
+# Lint config kept per-package so it doesn't bleed into the vendored
+# `contrib/liana` crate. CI runs plain `cargo clippy -p walletrs --no-deps`
+# and relies on these levels for strictness — using `-- -D warnings` at the
+# command line would propagate to liana's compilation too.
+[lints.rust]
+warnings = { level = "deny", priority = -1 }
+
 [lints.clippy]
+# The `priority = -1` on `all` makes the group apply before the specific
+# allows below, so individual lints can opt out without disabling the
+# whole group.
+all = { level = "deny", priority = -1 }
 # `tonic::Status` is intentionally large; wrapping every Result in Box buys
 # nothing and bloats handler signatures.
 result_large_err = "allow"
