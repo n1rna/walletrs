@@ -149,8 +149,7 @@ where
     B: StorageBackend + Clone,
 {
     fn store(&self, key: &str, item: &T) -> StorageResult<()> {
-        item.validate()
-            .map_err(|e| StorageError::SchemaValidation(e))?;
+        item.validate().map_err(StorageError::SchemaValidation)?;
 
         let path = self
             .path_strategy
@@ -160,7 +159,7 @@ where
         self.backend.write_bytes(&path, json_data.as_bytes())?;
 
         let indexable_fields = item.get_indexable_fields();
-        let mut index_manager = self.index_manager.lock().unwrap();
+        let index_manager = self.index_manager.lock().unwrap();
         let mut index = index_manager.load_or_create_index(&self.model_name)?;
         index.add_entry(key, indexable_fields);
         index_manager.save_index(&index)?;
@@ -197,7 +196,7 @@ where
         let deleted = self.backend.delete_file(&path)?;
 
         if deleted {
-            let mut index_manager = self.index_manager.lock().unwrap();
+            let index_manager = self.index_manager.lock().unwrap();
             let mut index = index_manager.load_or_create_index(&self.model_name)?;
             index.remove_entry(key);
             index_manager.save_index(&index)?;
@@ -273,7 +272,7 @@ where
             }
         }
 
-        let mut index_manager = self.index_manager.lock().unwrap();
+        let index_manager = self.index_manager.lock().unwrap();
         index_manager.save_index(&index)?;
 
         Ok(())

@@ -1,5 +1,5 @@
+use crate::storage::schema::{FieldSchema, FieldType, FieldValidation, IndexSchema};
 use crate::storage::{Schema, Storable, Storage, StorageManager, StorageResult};
-use crate::storage::schema::{FieldSchema, FieldType, IndexSchema, FieldValidation};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
@@ -16,11 +16,7 @@ pub struct StoredPSBT {
 }
 
 impl StoredPSBT {
-    pub fn new(
-        txid: &str,
-        wallet_id: &str,
-        psbt_data: &str,
-    ) -> Self {
+    pub fn new(txid: &str, wallet_id: &str, psbt_data: &str) -> Self {
         Self {
             txid: txid.to_string(),
             wallet_id: wallet_id.to_string(),
@@ -34,12 +30,7 @@ impl StoredPSBT {
         }
     }
 
-    pub fn new_with_status(
-        txid: &str,
-        wallet_id: &str,
-        psbt_data: &str,
-        status: &str,
-    ) -> Self {
+    pub fn new_with_status(txid: &str, wallet_id: &str, psbt_data: &str, status: &str) -> Self {
         Self {
             txid: txid.to_string(),
             wallet_id: wallet_id.to_string(),
@@ -66,8 +57,8 @@ impl StoredPSBT {
                 storage.store(&self.txid, self)
             }
             None => Err(crate::storage::StorageError::PathGeneration(
-                "StorageManager not set. Use with_storage_manager() first.".to_string()
-            ))
+                "StorageManager not set. Use with_storage_manager() first.".to_string(),
+            )),
         }
     }
 
@@ -88,7 +79,7 @@ impl StoredPSBT {
                 psbt._storage_manager = Some(storage_manager);
                 Ok(Some(psbt))
             }
-            None => Ok(None)
+            None => Ok(None),
         }
     }
 
@@ -101,15 +92,16 @@ impl StoredPSBT {
     }
 
     pub fn update_and_save_status(&mut self, status: &str) -> StorageResult<()> {
-        self.update_status(status).map_err(|e| crate::storage::StorageError::PathGeneration(e))?;
+        self.update_status(status)
+            .map_err(crate::storage::StorageError::PathGeneration)?;
         match self._storage_manager {
             Some(storage_manager) => {
                 let storage = storage_manager.psbts(&self.wallet_id)?;
                 storage.store(&self.txid, self)
             }
             None => Err(crate::storage::StorageError::PathGeneration(
-                "StorageManager not set. Use with_storage_manager() first.".to_string()
-            ))
+                "StorageManager not set. Use with_storage_manager() first.".to_string(),
+            )),
         }
     }
 
@@ -143,10 +135,13 @@ impl StoredPSBT {
     ) -> StorageResult<Vec<Self>> {
         let storage = storage_manager.psbts(wallet_id)?;
         let results = storage.query(&|_| true)?; // Get all PSBTs for wallet
-        Ok(results.into_iter().map(|(_, mut value)| {
-            value._storage_manager = Some(storage_manager);
-            value
-        }).collect())
+        Ok(results
+            .into_iter()
+            .map(|(_, mut value)| {
+                value._storage_manager = Some(storage_manager);
+                value
+            })
+            .collect())
     }
 
     pub fn list_by_status(
@@ -157,75 +152,74 @@ impl StoredPSBT {
         let storage = storage_manager.psbts(wallet_id)?;
         let filter_fn = |psbt: &Self| psbt.status == status;
         let results = storage.query(&filter_fn)?;
-        Ok(results.into_iter().map(|(_, mut value)| {
-            value._storage_manager = Some(storage_manager);
-            value
-        }).collect())
+        Ok(results
+            .into_iter()
+            .map(|(_, mut value)| {
+                value._storage_manager = Some(storage_manager);
+                value
+            })
+            .collect())
     }
 }
 
 impl Storable for StoredPSBT {
     fn schema() -> Schema {
         Schema::new("stored_psbt", 1, "Stored PSBT transaction data")
-            .add_field(FieldSchema::new(
-                "txid",
-                FieldType::String,
-                true,
-                "Transaction ID"
-            ).with_validation(FieldValidation {
-                min_length: Some(1),
-                max_length: Some(128),
-                pattern: None,
-                min_value: None,
-                max_value: None,
-                allowed_values: None,
-            }))
+            .add_field(
+                FieldSchema::new("txid", FieldType::String, true, "Transaction ID")
+                    .with_validation(FieldValidation {
+                        min_length: Some(1),
+                        max_length: Some(128),
+                        pattern: None,
+                        min_value: None,
+                        max_value: None,
+                        allowed_values: None,
+                    }),
+            )
             .add_field(FieldSchema::new(
                 "wallet_id",
                 FieldType::String,
                 true,
-                "Wallet ID this transaction belongs to"
+                "Wallet ID this transaction belongs to",
             ))
             .add_field(FieldSchema::new(
                 "psbt_data",
                 FieldType::String,
                 true,
-                "Base64 encoded PSBT data"
+                "Base64 encoded PSBT data",
             ))
             .add_field(FieldSchema::new(
                 "created_at",
                 FieldType::Integer,
                 true,
-                "Creation timestamp"
+                "Creation timestamp",
             ))
-            .add_field(FieldSchema::new(
-                "status",
-                FieldType::String,
-                true,
-                "Transaction status"
-            ).with_validation(FieldValidation {
-                min_length: None,
-                max_length: None,
-                pattern: None,
-                min_value: None,
-                max_value: None,
-                allowed_values: Some(vec![
-                    "draft".to_string(),
-                    "partial".to_string(),
-                    "finalized".to_string()
-                ]),
-            }))
+            .add_field(
+                FieldSchema::new("status", FieldType::String, true, "Transaction status")
+                    .with_validation(FieldValidation {
+                        min_length: None,
+                        max_length: None,
+                        pattern: None,
+                        min_value: None,
+                        max_value: None,
+                        allowed_values: Some(vec![
+                            "draft".to_string(),
+                            "partial".to_string(),
+                            "finalized".to_string(),
+                        ]),
+                    }),
+            )
             .add_index(IndexSchema::new(
                 "by_wallet_id",
                 vec!["wallet_id"],
                 false,
-                "Index by wallet ID"
+                "Index by wallet ID",
             ))
             .add_index(IndexSchema::new(
                 "by_status",
                 vec!["status"],
                 false,
-                "Index by transaction status"
+                "Index by transaction status",
             ))
     }
 
@@ -252,10 +246,22 @@ impl Storable for StoredPSBT {
     fn get_indexable_fields(&self) -> HashMap<String, serde_json::Value> {
         let mut fields = HashMap::new();
 
-        fields.insert("txid".to_string(), serde_json::Value::String(self.txid.clone()));
-        fields.insert("wallet_id".to_string(), serde_json::Value::String(self.wallet_id.clone()));
-        fields.insert("status".to_string(), serde_json::Value::String(self.status.clone()));
-        fields.insert("created_at".to_string(), serde_json::Value::Number(serde_json::Number::from(self.created_at)));
+        fields.insert(
+            "txid".to_string(),
+            serde_json::Value::String(self.txid.clone()),
+        );
+        fields.insert(
+            "wallet_id".to_string(),
+            serde_json::Value::String(self.wallet_id.clone()),
+        );
+        fields.insert(
+            "status".to_string(),
+            serde_json::Value::String(self.status.clone()),
+        );
+        fields.insert(
+            "created_at".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(self.created_at)),
+        );
 
         fields
     }

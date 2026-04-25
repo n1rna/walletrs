@@ -75,7 +75,7 @@ pub fn add_signers_for_psbt(
         }
 
         // Also check BIP32 derivation paths in the PSBT
-        for (_pk, (fingerprint, path)) in &input.bip32_derivation {
+        for (fingerprint, path) in input.bip32_derivation.values() {
             // Path is like m/84'/1'/0'/0/5 - we want the last two components (chain/index)
             if let Some(index) = path.into_iter().last() {
                 let chain_index = if path.len() >= 2 {
@@ -102,7 +102,7 @@ pub fn add_signers_for_psbt(
         }
 
         // Check Taproot key origins as well
-        for (_pk, (leaf_hashes, (fingerprint, path))) in &input.tap_key_origins {
+        for (leaf_hashes, (fingerprint, path)) in input.tap_key_origins.values() {
             if let Some(index) = path.into_iter().last() {
                 let chain_index = if path.len() >= 2 {
                     path[path.len() - 2]
@@ -145,13 +145,16 @@ pub fn add_signers_for_psbt(
     let device_fp = bdk_wallet::bitcoin::bip32::Fingerprint::from_str(device_fingerprint_str)
         .unwrap_or_default();
 
-    let is_taproot = psbt.inputs.iter().any(|input| !input.tap_key_origins.is_empty());
+    let is_taproot = psbt
+        .inputs
+        .iter()
+        .any(|input| !input.tap_key_origins.is_empty());
     let mut device_is_internal_key = true;
 
     if is_taproot {
         let mut found_in_origins = false;
         for input in &psbt.inputs {
-            for (_pk, (leaf_hashes, (fp, _path))) in &input.tap_key_origins {
+            for (leaf_hashes, (fp, _path)) in input.tap_key_origins.values() {
                 if *fp == device_fp {
                     found_in_origins = true;
                     if !leaf_hashes.is_empty() {
@@ -165,7 +168,11 @@ pub fn add_signers_for_psbt(
                 "Device {} (fp: {}) detected as {} taproot key",
                 device_id,
                 device_fingerprint_str,
-                if device_is_internal_key { "internal (keypath)" } else { "script path" }
+                if device_is_internal_key {
+                    "internal (keypath)"
+                } else {
+                    "script path"
+                }
             );
         } else {
             info!(
@@ -364,7 +371,11 @@ pub fn sign_psbt_with_taproot_support(
                     );
                     any_signatures = true;
                 }
-                if !has_tap_key_sig && tap_script_sigs_count == 0 && partial_sigs_count == 0 && !has_witness {
+                if !has_tap_key_sig
+                    && tap_script_sigs_count == 0
+                    && partial_sigs_count == 0
+                    && !has_witness
+                {
                     error!(
                         "✗ Input {}: NO SIGNATURES (no tap_key_sig, tap_script_sigs, partial_sigs, or witness)",
                         i
@@ -451,9 +462,7 @@ pub fn resolve_policy_path_from_leaf(
         return Ok(policy_path);
     }
 
-    for (recovery_idx, (_timelock, path_info)) in
-        liana_policy.recovery_paths().iter().enumerate()
-    {
+    for (recovery_idx, (_timelock, path_info)) in liana_policy.recovery_paths().iter().enumerate() {
         if path_owns_leaf(path_info, leaf_hash, &fp_to_leaves) {
             let policy_child_index = recovery_idx + 1;
             info!(
@@ -505,9 +514,11 @@ fn path_owns_leaf(
     fp_to_leaves: &HashMap<Fingerprint, HashSet<String>>,
 ) -> bool {
     let (_, fg_map) = path_info.thresh_origins();
-    fg_map
-        .keys()
-        .any(|fp| fp_to_leaves.get(fp).is_some_and(|set| set.contains(leaf_hash)))
+    fg_map.keys().any(|fp| {
+        fp_to_leaves
+            .get(fp)
+            .is_some_and(|set| set.contains(leaf_hash))
+    })
 }
 
 /// Sanity-check that BDK accepts the proposed policy path before we hand it to
@@ -537,9 +548,7 @@ mod tests {
     use crate::db::StoredManagedKey;
     use crate::wallet::advanced::shape::WalletShape;
     use crate::wallet::advanced::{descriptor, shape, taproot};
-    use crate::wallet::advanced::{
-        PolicyType, PreferredScriptType, SpendingCondition, WalletSpec,
-    };
+    use crate::wallet::advanced::{PolicyType, PreferredScriptType, SpendingCondition, WalletSpec};
 
     fn make_key(seed: u64) -> StoredManagedKey {
         let mut bytes = [0u8; 64];
@@ -610,8 +619,7 @@ mod tests {
         let pair = descriptor::build(&shape).unwrap();
         let liana_desc = pair.liana.clone().expect("liana descriptor");
 
-        let metadata =
-            taproot::extract(&primary_id, &primary, &recoveries, &liana_desc).unwrap();
+        let metadata = taproot::extract(&primary_id, &primary, &recoveries, &liana_desc).unwrap();
 
         let wallet = Wallet::create(pair.external.clone(), pair.internal.clone())
             .network(Network::Testnet)
@@ -638,8 +646,9 @@ mod tests {
             primary.leaf_hash
         );
 
-        let resolved = resolve_policy_path_from_leaf(&wallet, &primary.leaf_hash, Some(&liana_desc))
-            .expect("resolve primary leaf");
+        let resolved =
+            resolve_policy_path_from_leaf(&wallet, &primary.leaf_hash, Some(&liana_desc))
+                .expect("resolve primary leaf");
         let path = resolved.values().next().expect("policy path entry");
         assert_eq!(path, &vec![0]);
     }
@@ -652,12 +661,9 @@ mod tests {
             .find(|l| l.spending_condition_id == "recovery")
             .expect("recovery leaf");
 
-        let resolved = resolve_policy_path_from_leaf(
-            &wallet,
-            &recovery.leaf_hash,
-            Some(&liana_desc),
-        )
-        .expect("resolve recovery leaf");
+        let resolved =
+            resolve_policy_path_from_leaf(&wallet, &recovery.leaf_hash, Some(&liana_desc))
+                .expect("resolve recovery leaf");
         let path = resolved.values().next().expect("policy path entry");
         assert_eq!(path, &vec![1]);
     }
@@ -665,11 +671,7 @@ mod tests {
     #[test]
     fn unknown_leaf_returns_invalid_argument() {
         let (wallet, liana_desc, _) = build_timelocked_wallet();
-        let result = resolve_policy_path_from_leaf(
-            &wallet,
-            "deadbeef",
-            Some(&liana_desc),
-        );
+        let result = resolve_policy_path_from_leaf(&wallet, "deadbeef", Some(&liana_desc));
         assert!(result.is_err());
     }
 

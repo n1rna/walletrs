@@ -1,5 +1,5 @@
-use crate::storage::{LocalFileSystemBackend, StorageBackend, StorageResult};
 use crate::storage::s3::S3Backend;
+use crate::storage::{LocalFileSystemBackend, StorageBackend, StorageResult};
 
 #[derive(Clone)]
 pub enum AnyBackend {

@@ -147,7 +147,7 @@ fn generate_device_key(wallet_name: &str, name_opt: Option<String>) -> Result<Ke
     let primary_path = KeyUtils::get_primary_derivation_path(network);
 
     // Derive account keys
-    let account_xprv = KeyUtils::generate_account_extended_key(key_result.xprv, network);
+    let _account_xprv = KeyUtils::generate_account_extended_key(key_result.xprv, network);
     let tpriv = key_result.xprv.derive_priv(&secp, &primary_path).unwrap();
     let tpub = bip32::Xpub::from_priv(&secp, &tpriv);
 
@@ -287,11 +287,11 @@ fn sign_psbt(psbt_path: &PathBuf) -> Result<()> {
     let dev1_tprv = dev1_xprv.derive_priv(&secp, &primary_path).unwrap();
     let dev2_tprv = dev2_xprv.derive_priv(&secp, &primary_path).unwrap();
 
-    let dev1_external_descriptor = format!("wsh(thresh(2,pk([9adc0404/84'/1'/0']tpubDCDi6eQ3SYBXp1YSvxzPUXtn4WcUV4tYsgwqeTqwQcaxv6ACqK35QK4kQpU9HJbtbYtbP5SGVtfxMm1xA3vwvHpkvmYbqYWrYkjpiBf8L88/0/*),s:pk([da5cc276/84'/1'/0']{}/0/*),s:pk([cd03aa2f/84'/1'/0']tpubDDUwNN3dNB2UyaXrDAYd51iXnRRKGeozYW8aGRsNwT3Rb1sdFQQ1SWB4XpqK9hcd99fjyxWzmgGXzzkPoZA47FHHhsNFnVeFRtRqmDDfVQp/0/*)))", dev1_tprv.to_string());
-    let dev1_internal_descriptor = format!("wsh(thresh(2,pk([9adc0404/84'/1'/0']tpubDCDi6eQ3SYBXp1YSvxzPUXtn4WcUV4tYsgwqeTqwQcaxv6ACqK35QK4kQpU9HJbtbYtbP5SGVtfxMm1xA3vwvHpkvmYbqYWrYkjpiBf8L88/1/*),s:pk([da5cc276/84'/1'/0']{}/1/*),s:pk([cd03aa2f/84'/1'/0']tpubDDUwNN3dNB2UyaXrDAYd51iXnRRKGeozYW8aGRsNwT3Rb1sdFQQ1SWB4XpqK9hcd99fjyxWzmgGXzzkPoZA47FHHhsNFnVeFRtRqmDDfVQp/1/*)))", dev1_tprv.to_string());
+    let dev1_external_descriptor = format!("wsh(thresh(2,pk([9adc0404/84'/1'/0']tpubDCDi6eQ3SYBXp1YSvxzPUXtn4WcUV4tYsgwqeTqwQcaxv6ACqK35QK4kQpU9HJbtbYtbP5SGVtfxMm1xA3vwvHpkvmYbqYWrYkjpiBf8L88/0/*),s:pk([da5cc276/84'/1'/0']{}/0/*),s:pk([cd03aa2f/84'/1'/0']tpubDDUwNN3dNB2UyaXrDAYd51iXnRRKGeozYW8aGRsNwT3Rb1sdFQQ1SWB4XpqK9hcd99fjyxWzmgGXzzkPoZA47FHHhsNFnVeFRtRqmDDfVQp/0/*)))", dev1_tprv);
+    let dev1_internal_descriptor = format!("wsh(thresh(2,pk([9adc0404/84'/1'/0']tpubDCDi6eQ3SYBXp1YSvxzPUXtn4WcUV4tYsgwqeTqwQcaxv6ACqK35QK4kQpU9HJbtbYtbP5SGVtfxMm1xA3vwvHpkvmYbqYWrYkjpiBf8L88/1/*),s:pk([da5cc276/84'/1'/0']{}/1/*),s:pk([cd03aa2f/84'/1'/0']tpubDDUwNN3dNB2UyaXrDAYd51iXnRRKGeozYW8aGRsNwT3Rb1sdFQQ1SWB4XpqK9hcd99fjyxWzmgGXzzkPoZA47FHHhsNFnVeFRtRqmDDfVQp/1/*)))", dev1_tprv);
 
-    let dev2_external_descriptor = format!("wsh(thresh(2,pk([9adc0404/84'/1'/0']tpubDCDi6eQ3SYBXp1YSvxzPUXtn4WcUV4tYsgwqeTqwQcaxv6ACqK35QK4kQpU9HJbtbYtbP5SGVtfxMm1xA3vwvHpkvmYbqYWrYkjpiBf8L88/0/*),s:pk([da5cc276/84'/1'/0']tpubDCVafo6EE7sBXJwUesPDyv3AcX47eddPSXzLTFeKgcd6hJY8mgxLLCdFfH8JcmhUYCaaXvpLWeaGV29h8SNomc7jVt4naxyQXfAjSQaVixq/0/*),s:pk([cd03aa2f/84'/1'/0']{}/0/*)))", dev2_tprv.to_string());
-    let dev2_internal_descriptor = format!("wsh(thresh(2,pk([9adc0404/84'/1'/0']tpubDCDi6eQ3SYBXp1YSvxzPUXtn4WcUV4tYsgwqeTqwQcaxv6ACqK35QK4kQpU9HJbtbYtbP5SGVtfxMm1xA3vwvHpkvmYbqYWrYkjpiBf8L88/1/*),s:pk([da5cc276/84'/1'/0']tpubDCVafo6EE7sBXJwUesPDyv3AcX47eddPSXzLTFeKgcd6hJY8mgxLLCdFfH8JcmhUYCaaXvpLWeaGV29h8SNomc7jVt4naxyQXfAjSQaVixq/1/*),s:pk([cd03aa2f/84'/1'/0']{}/1/*)))", dev2_tprv.to_string());
+    let dev2_external_descriptor = format!("wsh(thresh(2,pk([9adc0404/84'/1'/0']tpubDCDi6eQ3SYBXp1YSvxzPUXtn4WcUV4tYsgwqeTqwQcaxv6ACqK35QK4kQpU9HJbtbYtbP5SGVtfxMm1xA3vwvHpkvmYbqYWrYkjpiBf8L88/0/*),s:pk([da5cc276/84'/1'/0']tpubDCVafo6EE7sBXJwUesPDyv3AcX47eddPSXzLTFeKgcd6hJY8mgxLLCdFfH8JcmhUYCaaXvpLWeaGV29h8SNomc7jVt4naxyQXfAjSQaVixq/0/*),s:pk([cd03aa2f/84'/1'/0']{}/0/*)))", dev2_tprv);
+    let dev2_internal_descriptor = format!("wsh(thresh(2,pk([9adc0404/84'/1'/0']tpubDCDi6eQ3SYBXp1YSvxzPUXtn4WcUV4tYsgwqeTqwQcaxv6ACqK35QK4kQpU9HJbtbYtbP5SGVtfxMm1xA3vwvHpkvmYbqYWrYkjpiBf8L88/1/*),s:pk([da5cc276/84'/1'/0']tpubDCVafo6EE7sBXJwUesPDyv3AcX47eddPSXzLTFeKgcd6hJY8mgxLLCdFfH8JcmhUYCaaXvpLWeaGV29h8SNomc7jVt4naxyQXfAjSQaVixq/1/*),s:pk([cd03aa2f/84'/1'/0']{}/1/*)))", dev2_tprv);
 
     // Create a temporary wallet with the key
     let dev1_wallet =

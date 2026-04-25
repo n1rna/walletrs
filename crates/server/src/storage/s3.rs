@@ -117,7 +117,7 @@ impl StorageBackend for S3Backend {
                         .body
                         .collect()
                         .await
-                        .map_err(|e| StorageError::Io(io::Error::new(io::ErrorKind::Other, e)))?;
+                        .map_err(|e| StorageError::Io(io::Error::other(e)))?;
                     Ok(data.into_bytes().to_vec())
                 }
                 Err(e) => Err(map_sdk_err(e, "get_object")),
@@ -148,12 +148,7 @@ impl StorageBackend for S3Backend {
         let bucket = self.inner.bucket.clone();
         let key = self.key(path);
         run_on_s3(async move {
-            let head = client
-                .head_object()
-                .bucket(&bucket)
-                .key(&key)
-                .send()
-                .await;
+            let head = client.head_object().bucket(&bucket).key(&key).send().await;
             match head {
                 Ok(_) => {
                     client
@@ -188,10 +183,7 @@ impl StorageBackend for S3Backend {
             let mut keys = Vec::new();
             let mut continuation: Option<String> = None;
             loop {
-                let mut req = client
-                    .list_objects_v2()
-                    .bucket(&bucket)
-                    .prefix(&key_prefix);
+                let mut req = client.list_objects_v2().bucket(&bucket).prefix(&key_prefix);
                 if let Some(token) = continuation.clone() {
                     req = req.continuation_token(token);
                 }
@@ -260,7 +252,7 @@ async fn build_client(cfg: S3Config) -> Client {
     // out, but as of aws-sdk-s3 1.103 it doesn't fully suppress the
     // header in all code paths — pinning the behavior version is the
     // reliable workaround.
-    let loader = aws_config::defaults(BehaviorVersion::v2024_03_28()).region(region);
+    let loader = aws_config::defaults(BehaviorVersion::v2026_01_12()).region(region);
     let loader = match (&cfg.access_key_id, &cfg.secret_access_key) {
         (Some(id), Some(secret)) => loader.credentials_provider(Credentials::new(
             id.clone(),
@@ -316,8 +308,5 @@ where
         }
     }
 
-    StorageError::Io(io::Error::new(
-        io::ErrorKind::Other,
-        format!("s3 {}: {}", op, detail),
-    ))
+    StorageError::Io(io::Error::other(format!("s3 {}: {}", op, detail)))
 }

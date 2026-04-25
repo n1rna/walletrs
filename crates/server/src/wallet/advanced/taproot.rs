@@ -158,8 +158,7 @@ fn leaf_hash_for_path(
         });
     }
 
-    intersection
-        .and_then(|set| set.into_iter().min())
+    intersection.and_then(|set| set.into_iter().min())
 }
 
 fn path_fingerprints(path: &PolicyPath) -> Vec<Fingerprint> {

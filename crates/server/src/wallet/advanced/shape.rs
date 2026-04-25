@@ -100,9 +100,7 @@ struct ResolvedCondition {
     path: PolicyPath,
 }
 
-fn resolve_conditions(
-    spec: &WalletSpec,
-) -> Result<Vec<ResolvedCondition>, WalletCreationError> {
+fn resolve_conditions(spec: &WalletSpec) -> Result<Vec<ResolvedCondition>, WalletCreationError> {
     spec.conditions
         .iter()
         .map(|cond| resolve_condition(cond, &spec.managed_keys))

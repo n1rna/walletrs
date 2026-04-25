@@ -252,11 +252,10 @@ fn bdk_store_round_trip_via_backend() {
     {
         let mut store = Store::<ChangeSet>::open_or_create_new(BDK_STORE_MAGIC, &store_path)
             .expect("open new store");
-        let _wallet =
-            Wallet::create(TEST_EXTERNAL_DESCRIPTOR, TEST_INTERNAL_DESCRIPTOR)
-                .network(bdk_wallet::bitcoin::Network::Testnet)
-                .create_wallet(&mut store)
-                .expect("create wallet");
+        let _wallet = Wallet::create(TEST_EXTERNAL_DESCRIPTOR, TEST_INTERNAL_DESCRIPTOR)
+            .network(bdk_wallet::bitcoin::Network::Testnet)
+            .create_wallet(&mut store)
+            .expect("create wallet");
     }
 
     let bytes = std::fs::read(&store_path).expect("read store");

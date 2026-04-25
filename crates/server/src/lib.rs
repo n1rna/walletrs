@@ -5,7 +5,7 @@ pub mod storage;
 pub mod wallet;
 
 // Re-export key components that will be used by both the server and CLI
-pub use wallet::bdk::{KeyUtils, KeyGenerationResult, BdkWalletManager, BdkWalletError};
+pub use wallet::bdk::{BdkWalletError, BdkWalletManager, KeyGenerationResult, KeyUtils};
 
 // Re-export Liana components for policy and descriptor handling
 pub use liana::{
