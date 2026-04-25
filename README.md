@@ -24,11 +24,23 @@ Built on top of [BDK](https://github.com/bitcoindevkit/bdk), [rust-miniscript](h
 
 > Detailed deployment notes are in [`docs/OPERATING.md`](docs/OPERATING.md). Integration guide for client code is in [`docs/INTEGRATING.md`](docs/INTEGRATING.md).
 
+### With Docker (recommended)
+
+The included `docker-compose.yml` brings up bitcoind + electrs + walletrs in regtest:
+
 ```bash
-# Build
+docker compose up --build
+```
+
+walletrs listens on `127.0.0.1:50051`. The first boot logs a `STORE THIS — generated auth token: <token>` line; copy that into your client's bearer-auth config. Pin a fixed token by setting `WALLETRS_AUTH_TOKEN` in a `.env` next to the compose file.
+
+For mainnet, signet, or testnet: edit the `bitcoind` service flags + `electrs --network` arg + `BITCOIN_NETWORK` env to match.
+
+### From source
+
+```bash
 cargo build --release --bin walletrs
 
-# Run on regtest with local-disk storage
 WALLETRS_HOST=127.0.0.1 \
 WALLETRS_PORT=50051 \
 BITCOIN_NETWORK=regtest \

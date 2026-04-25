@@ -1,0 +1,100 @@
+# Regtest stack: bitcoind + electrs + walletrs.
+#
+# Spin it up with `docker compose up --build` and you get a working walletrs
+# at localhost:50051 backed by a regtest bitcoind. The first walletrs log
+# line emits a `STORE THIS — generated auth token: <token>` entry; copy it
+# into your client's bearer-auth config.
+#
+# Override the network by setting `BITCOIN_NETWORK` (e.g. signet, testnet)
+# in a `.env` file next to this compose. For mainnet, swap the bitcoind
+# image flags and configure persistent storage volumes accordingly.
+
+x-defaults: &defaults
+  restart: unless-stopped
+
+services:
+  bitcoind:
+    <<: *defaults
+    image: lncm/bitcoind:v25.0
+    command:
+      - -regtest=1
+      - -server=1
+      - -rest=1
+      - -txindex=1
+      - -fallbackfee=0.0002
+      - -rpcuser=walletrs
+      - -rpcpassword=walletrs-regtest
+      - -rpcbind=0.0.0.0:8332
+      - -rpcallowip=0.0.0.0/0
+      - -zmqpubrawblock=tcp://0.0.0.0:29000
+      - -zmqpubrawtx=tcp://0.0.0.0:29000
+    volumes:
+      - bitcoind-data:/data/.bitcoin
+    ports:
+      - "127.0.0.1:8332:8332"
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-regtest", "-rpcuser=walletrs", "-rpcpassword=walletrs-regtest", "getblockchaininfo"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  electrs:
+    <<: *defaults
+    image: mempool/electrs:latest
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    environment:
+      RUST_LOG: electrs=info
+    volumes:
+      - bitcoind-data:/root/.bitcoin:ro
+      - electrs-data:/data
+    command:
+      - --network=regtest
+      - --daemon-rpc-addr=bitcoind:8332
+      - --cookie=walletrs:walletrs-regtest
+      - --electrum-rpc-addr=0.0.0.0:60401
+      - --http-addr=0.0.0.0:3002
+      - --cors=*
+    ports:
+      - "127.0.0.1:60401:60401"
+      - "127.0.0.1:3002:3002"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '(echo > /dev/tcp/localhost/60401) 2>/dev/null'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  walletrs:
+    <<: *defaults
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      electrs:
+        condition: service_healthy
+    environment:
+      WALLETRS_HOST: 0.0.0.0
+      WALLETRS_PORT: 50051
+      BITCOIN_NETWORK: regtest
+      ELECTRS_URL: tcp://electrs:60401
+      WALLETRS_STORAGE_KIND: local
+      WALLETRS_STORAGE_PATH: /data
+      # Set WALLETRS_AUTH_TOKEN to pin a known token, otherwise one is
+      # auto-generated and printed once at startup.
+      WALLETRS_AUTH_TOKEN: ${WALLETRS_AUTH_TOKEN:-}
+      # Required for system-managed-key flows (envelope encryption).
+      # Generate with: openssl rand -base64 32
+      WALLETRS_KEK: ${WALLETRS_KEK:-}
+      RUST_LOG: info,walletrs=debug
+    ports:
+      - "127.0.0.1:50051:50051"
+    volumes:
+      - walletrs-data:/data
+
+volumes:
+  bitcoind-data:
+  electrs-data:
+  walletrs-data:
