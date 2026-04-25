@@ -20,12 +20,16 @@ pub struct S3Config {
 }
 
 pub struct Config {
+    pub host: String,
+    pub port: u16,
     pub electrs_url: String,
     pub bitcoin_network: String,
     pub storage_base_path: String,
     pub storage_kind: StorageKind,
     pub s3: Option<S3Config>,
     pub kek_b64: Option<String>,
+    pub auth_disabled: bool,
+    pub auth_token: Option<String>,
 }
 
 impl Config {
@@ -56,7 +60,23 @@ impl Config {
             None
         };
 
+        let auth_disabled = env::var("WALLETRS_AUTH_DISABLED")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        let auth_token = env::var("WALLETRS_AUTH_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty());
+
+        let port = env::var("WALLETRS_PORT")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(50051);
+        let host = env::var("WALLETRS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+
         Self {
+            host,
+            port,
             electrs_url: env::var("ELECTRS_URL").unwrap_or_else(|_| "127.0.0.1:60401".to_string()),
             bitcoin_network: env::var("BITCOIN_NETWORK").unwrap_or_else(|_| "regtest".to_string()),
             storage_base_path: env::var("WALLETRS_STORAGE_PATH")
@@ -64,6 +84,8 @@ impl Config {
             storage_kind,
             s3,
             kek_b64: env::var("WALLETRS_KEK").ok(),
+            auth_disabled,
+            auth_token,
         }
     }
 
@@ -93,6 +115,22 @@ impl Config {
 
     pub fn network(&self) -> Network {
         parse_network_str(&self.bitcoin_network).unwrap_or(Network::Regtest)
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    pub fn auth_disabled(&self) -> bool {
+        self.auth_disabled
+    }
+
+    pub fn auth_token(&self) -> Option<&str> {
+        self.auth_token.as_deref()
     }
 }
 

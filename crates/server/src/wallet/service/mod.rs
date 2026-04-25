@@ -1,4 +1,5 @@
 // Module declarations
+pub mod auth;
 pub mod key_management;
 pub mod middleware;
 pub mod system;
