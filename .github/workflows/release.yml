@@ -159,8 +159,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # `gh release edit` doesn't have `--generate-notes` (that flag lives
+      # on `gh release create`). Generate via the REST API and patch the
+      # body in.
       - name: update release with auto-generated notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release edit "${GITHUB_REF_NAME}" --generate-notes
+          notes=$(gh api repos/${{ github.repository }}/releases/generate-notes \
+            -F tag_name="${GITHUB_REF_NAME}" \
+            --jq '.body')
+          gh release edit "${GITHUB_REF_NAME}" --notes "$notes"
