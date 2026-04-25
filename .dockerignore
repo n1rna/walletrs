@@ -1,0 +1,13 @@
+target/
+.git/
+.github/
+.idea/
+.vscode/
+data/
+*.store
+.env
+.env.local
+
+# Editor
+.DS_Store
+Thumbs.db
