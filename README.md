@@ -2,13 +2,13 @@
 
 A standalone gRPC service for advanced Bitcoin wallets — multisig, miniscript policies, taproot leaf-hash spends, PSBT lifecycle.
 
-Built on top of [BDK](https://github.com/bitcoindevkit/bdk), [rust-miniscript](https://github.com/rust-bitcoin/rust-miniscript), and a vendored fork of [Liana](https://github.com/wizardsardine/liana) for primary/recovery descriptor policies.
+Built on top of [BDK](https://github.com/bitcoindevkit/bdk) and [rust-miniscript](https://github.com/rust-bitcoin/rust-miniscript).
 
 > **Status:** pre-1.0. The gRPC contract (`proto/walletrpc.proto`) is stable in spirit but may still gain fields. Track the [CHANGELOG](CHANGELOG.md) before integrating.
 
 ## What it does
 
-- Creates Bitcoin wallets from declarative spending conditions (single sig, sortedmulti, taproot multisig with NUMS internal key, Liana primary + time-locked recoveries).
+- Creates Bitcoin wallets from declarative spending conditions (single sig, sortedmulti, taproot multisig with NUMS internal key, primary + time-locked recovery policies).
 - Manages keys: imports customer xpubs, generates system keys with envelope-encrypted private material, signs PSBTs from stored keys.
 - Funds, signs, finalizes, and broadcasts transactions over gRPC.
 - Resolves taproot leaf hashes back to BDK policy paths so clients can pick which spending path to use.
@@ -76,17 +76,14 @@ walletrs/
 ├── crates/
 │   └── server/        # main gRPC binary + library
 ├── contrib/
-│   └── liana/         # vendored fork of wizardsardine/liana — see contrib/liana/UPSTREAM.md
+│   └── liana/
 ├── proto/
 │   └── walletrpc.proto
 ├── docs/              # operator + integrator documentation (TBD)
-├── LICENSE-MIT
-├── LICENSE-APACHE
+├── LICENSE
 └── README.md
 ```
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at your option.
-
-The vendored `contrib/liana/` crate is BSD-3-Clause licensed by its upstream authors at Wizardsardine — see `contrib/liana/LICENCE` for the exact terms and `contrib/liana/UPSTREAM.md` for the version pin and rebase procedure.
+[BSD 3-Clause](LICENSE).

@@ -13,6 +13,7 @@ All notable changes to this project will be documented here. The format follows 
 
 ### Changed
 
-- Repository extracted from the `sigvault` monorepo. Cargo workspace at the root with `crates/server` (the gRPC binary + library) and `contrib/liana` (vendored upstream, BSD-3-Clause; pin documented in `contrib/liana/UPSTREAM.md`). The proto contract lives at `proto/walletrpc.proto` as the single source of truth.
+- Repository extracted from the `sigvault` monorepo. Cargo workspace at the root with `crates/server` (the gRPC binary + library) and `contrib/liana`. The proto contract lives at `proto/walletrpc.proto` as the single source of truth.
+- License: BSD-3-Clause (single `LICENSE` file).
 
 [Unreleased]: https://github.com/n1rna/walletrs/compare/v0.1.0...HEAD
