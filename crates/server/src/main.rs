@@ -1,10 +1,10 @@
 use log::{info, trace};
-use std::env;
 use tonic::transport::Server;
 use tower::ServiceBuilder;
+use walletrs_lib::config::CONFIG;
 use walletrs_lib::db;
-
 use walletrs_lib::proto::pb::wallet_service_server::WalletServiceServer;
+use walletrs_lib::wallet::service::auth::{AuthLayer, AuthMode};
 use walletrs_lib::wallet::service::middleware::LoggingLayer;
 use walletrs_lib::wallet::service::WalletRPC;
 
@@ -12,28 +12,28 @@ use walletrs_lib::wallet::service::WalletRPC;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
-    // Build marker — bump when you want to confirm a rebuild actually shipped.
-    info!("walletrs build marker: R2-SIG-FIX-V1");
+    info!("walletrs starting (network: {})", CONFIG.bitcoin_network());
 
     if let Err(e) = db::init_all_storage() {
-        return Err(format!("Failed to initialize managed keys storage: {}", e).into());
+        return Err(format!("Failed to initialize storage: {}", e).into());
     }
 
-    // Get port from environment variable or use default
-    let port = env::var("WALLETRS_PORT").unwrap_or_else(|_| "50051".to_string());
-    let host = env::var("WALLETRS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let addr = format!("{}:{}", host, port).parse()?;
-    info!("Starting wallet service on {}", addr);
+    let auth_mode = AuthMode::from_config(
+        CONFIG.auth_disabled(),
+        CONFIG.auth_token().map(|s| s.to_string()),
+    );
 
+    let addr = format!("{}:{}", CONFIG.host(), CONFIG.port()).parse()?;
     let walletrpc = WalletRPC::default();
-
-    trace!("Wallet RPC service initialized");
-
-    info!("Server starting up...");
-    info!("Server is running on {}", addr);
+    trace!("WalletRPC service initialized");
+    info!("Listening on {}", addr);
 
     Server::builder()
-        .layer(ServiceBuilder::new().layer(LoggingLayer))
+        .layer(
+            ServiceBuilder::new()
+                .layer(AuthLayer::new(auth_mode))
+                .layer(LoggingLayer),
+        )
         .add_service(WalletServiceServer::new(walletrpc))
         .serve(addr)
         .await?;

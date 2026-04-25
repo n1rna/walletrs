@@ -40,6 +40,8 @@ parking_lot = { version = "0.12", features = ["arc_lock"] }
 chacha20poly1305 = "0.10"
 base64 = "0.22"
 rand = "0.8"
+subtle = "2"
+http = "0.2"
 aws-config = { version = "1.5", features = ["behavior-version-latest"] }
 aws-sdk-s3 = { version = "1.60", features = ["behavior-version-latest"] }
 aws-credential-types = "1.2"
