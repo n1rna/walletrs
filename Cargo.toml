@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/server",
+    "contrib/liana",
+]
+
+# Trade ~5% runtime speed for ~2-3× faster release compiles.
+# walletrs is gRPC/IO bound, extra codegen parallelism wins everywhere.
+[profile.release]
+codegen-units = 16
+lto = false
+incremental = false

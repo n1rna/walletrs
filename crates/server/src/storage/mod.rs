@@ -1,0 +1,22 @@
+pub mod traits;
+pub mod filesystem;
+pub mod s3;
+pub mod backend;
+pub mod crypto;
+pub mod encrypting;
+pub mod schema;
+pub mod index;
+pub mod path;
+pub mod models;
+pub mod manager;
+
+pub use traits::{Storage, StorageBackend, IndexableStorage, StorageResult, StorageError};
+pub use filesystem::{FileSystemStorage, LocalFileSystemBackend};
+pub use s3::S3Backend;
+pub use backend::AnyBackend;
+pub use crypto::EnvelopeCipher;
+pub use encrypting::EncryptingBackend;
+pub use schema::{Schema, Storable};
+pub use index::{IndexCache, IndexEntry, IndexManager};
+pub use path::{PathStrategy, ScopeType, FileSystemPathStrategy};
+pub use manager::{StorageManager, ManagedKeyStorage, PSBTStorage, SignedPSBTStorage};

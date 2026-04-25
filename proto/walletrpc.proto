@@ -1,0 +1,358 @@
+syntax = "proto3";
+
+package walletrpc;
+
+service WalletService {
+	// Queries
+	rpc Ping (PingRequest) returns (PingResponse);
+
+	// Notifications
+	// rpc TransactionNotifications (TransactionNotificationsRequest) returns (stream TransactionNotificationsResponse);
+	// rpc SpentnessNotifications (SpentnessNotificationsRequest) returns (stream SpentnessNotificationsResponse);
+	// rpc AccountNotifications (AccountNotificationsRequest) returns (stream AccountNotificationsResponse);
+
+	rpc CreateGenericWallet (CreateGenericWalletRequest) returns (CreateGenericWalletResponse);
+
+	// Unified Key Management
+	rpc CreateSystemManagedKey (CreateSystemManagedKeysRequest) returns (CreateSystemManagedKeysResponse);
+	rpc CreateCustomerManagedKey (CreateCustomerManagedKeyRequest) returns (CreateCustomerManagedKeyResponse);
+	rpc GetManagedKey (GetManagedKeyRequest) returns (GetManagedKeyResponse);
+	rpc ListManagedKeys (ListManagedKeysRequest) returns (ListManagedKeysResponse);
+
+	rpc GetWallet (GetWalletRequest) returns (GetWalletResponse);
+	rpc UpdateWallet (UpdateWalletRequest) returns (UpdateWalletResponse);
+	rpc RevealNextAddress (RevealNextAddressRequest) returns (RevealNextAddressResponse);
+	rpc ListAddresses (ListAddressesRequest) returns (ListAddressesResponse);
+	rpc GetWalletTransactions (GetWalletTransactionsRequest) returns (GetWalletTransactionsResponse);
+	rpc GetWalletUtxos (GetWalletUtxosRequest) returns (GetWalletUtxosResponse);
+
+	rpc FundWalletTransaction (FundWalletTransactionRequest) returns (FundWalletTransactionResponse);
+	rpc SignWalletTransaction (SignWalletTransactionRequest) returns (SignWalletTransactionResponse);
+	rpc AddVerifyTransactionSignature (AddVerifyTransactionSignatureRequest) returns (AddVerifyTransactionSignatureResponse);
+	rpc FinalizeWalletTransaction (FinalizeWalletTransactionRequest) returns (FinalizeWalletTransactionResponse);
+	rpc BroadcastWalletTransaction (BroadcastWalletTransactionRequest) returns (BroadcastWalletTransactionResponse);
+
+	// Taproot spending path management
+	rpc GetWalletSpendingPaths (GetWalletSpendingPathsRequest) returns (GetWalletSpendingPathsResponse);
+
+	// rpc ImportPrivateKey (ImportPrivateKeyRequest) returns (ImportPrivateKeyResponse);
+	// rpc FundTransaction (FundTransactionRequest) returns (FundTransactionResponse);
+	// rpc SignTransaction (SignTransactionRequest) returns (SignTransactionResponse);
+	// rpc PublishTransaction (PublishTransactionRequest) returns (PublishTransactionResponse);
+}
+
+message PingRequest {}
+message PingResponse {}
+
+
+message GetWalletRequest {
+	string wallet_id = 1;
+	bytes passphrase = 2;
+}
+
+message GetWalletResponse {
+	string wallet_id = 1;
+	string balance = 2;
+}
+
+message RevealNextAddressRequest {
+	string wallet_id = 1;
+	uint32 num = 2;
+	bool change = 3;
+}
+
+message Address {
+	string address = 1;
+	string derivationpath = 2;
+	bool change = 4;
+}
+
+message Transaction {
+	string txid = 1;
+	uint32 blockheight = 2;
+	string blockhash = 3;
+	uint64 total_sent = 4;
+	uint64 total_received = 5;
+	uint64 fee = 6;
+	uint64 fee_per_kb = 7;
+	uint32 version = 8;
+	uint32 locktime = 9;
+	uint32 size = 10;
+	uint32 vsize = 11;
+	string status = 12;
+	bool coinbase = 13;
+	repeated TransactionInput inputs = 14;
+	repeated TransactionOutput outputs = 15;
+}
+
+message TransactionOutput {
+	uint64 value = 1;
+	string script = 2;
+	bool is_mine = 3;
+	string address = 4;
+	uint32 output_n = 5;
+}
+
+message TransactionInput {
+	string prev_txid = 1;
+	uint32 prev_vout = 2;
+	string address = 3;
+	string script = 4;
+	string script_type = 5;
+	bool is_mine = 6;
+	uint64 value = 7;
+}
+
+
+message RevealNextAddressResponse {
+	repeated Address addresses = 1;
+}
+
+message ListAddressesRequest {
+	string wallet_id = 1;
+	bool change = 2;
+}
+
+message ListAddressesResponse {
+	repeated Address addresses = 1;
+}
+
+message GetWalletTransactionsRequest {
+	string wallet_id = 1;
+}
+
+message GetWalletTransactionsResponse {
+	repeated Transaction transactions = 1;
+}
+
+message GetWalletUtxosRequest {
+	string wallet_id = 1;
+}
+
+message UTXO {
+	string txid = 1;
+	uint32 vout = 2;
+	string address = 3;
+	uint64 value = 4;
+	string script = 5;
+	string script_type = 6;
+	uint32 block_height = 7;
+	string block_hash = 8;
+	bool spent = 9;
+}
+
+message GetWalletUtxosResponse {
+	repeated UTXO utxos = 1;
+}
+
+message FundWalletTransactionRequest {
+	string wallet_id = 1;
+	string destination_address = 2;
+	uint64 destination_value = 3;
+	string change_address = 4;
+	uint64 fee_per_kb = 5;
+	string selected_leaf_hash = 6; // Hex-encoded taproot leaf hash for spending path selection
+	bool spend_change = 7;
+}
+
+message FundWalletTransactionResponse {
+	string txid = 1;
+	string psbt = 2;
+	string network = 3;
+	uint64 input_total = 4;
+	uint64 output_total = 5;
+	uint64 fee = 6;
+	uint64 fee_per_kb = 7;
+	uint32 size = 8;
+	repeated TransactionInput inputs = 9;
+	repeated TransactionOutput outputs = 10;
+	string tx_json = 11;
+	string tx_raw = 12;
+	string pruned_psbt = 13;
+}
+
+message SignWalletTransactionRequest {
+	string wallet_id = 1;
+	string txid = 2;
+	string device_id = 3; // Specific device to use for signing
+}
+
+message SignWalletTransactionResponse {
+	string txid = 1;
+	string network = 2;
+	string tx_json = 3;
+	string tx_raw = 4;
+}
+
+message BroadcastWalletTransactionRequest {
+	string wallet_id = 1;
+	string txid = 2;
+}
+
+message BroadcastWalletTransactionResponse {
+	string txid = 1;
+	string network = 2;
+}
+
+message UpdateWalletRequest {
+	string wallet_id = 1;
+}
+
+message UpdateWalletResponse {
+	string wallet_id = 1;
+	string balance = 2;
+}
+
+message AddVerifyTransactionSignatureRequest {
+	string wallet_id = 1;
+	string txid = 2;
+	string signedpsbt = 3;
+	string devicefingerprint = 4;
+	string devicederivationpath = 5;
+}
+
+message AddVerifyTransactionSignatureResponse {
+	string txid = 1;
+	string status = 2;
+}
+
+message FinalizeWalletTransactionRequest {
+	string wallet_id = 1;
+	string txid = 2;
+}
+
+message FinalizeWalletTransactionResponse {
+	string txid = 1;
+	string network = 2;
+	string tx_json = 3;
+	string tx_raw = 4;
+}
+
+// Unified Key Info - used for both customer and system managed keys
+message ManagedKeyInfo {
+	string user_id = 1;
+	string device_id = 2;
+	string key_name = 3;
+	string key_type = 4; // "customer" or "system"
+	string xpub = 5;
+	string fingerprint = 6;
+	string derivation_path = 7;
+	int64 created_at = 8;
+}
+
+// Customer Managed Key Messages - public keys provided by user
+message CreateCustomerManagedKeyRequest {
+	string user_id = 1;
+	string device_id = 2;
+	string key_name = 3;
+	string xpub = 4;
+	string fingerprint = 5;
+	string derivation_path = 6;
+}
+
+message CreateCustomerManagedKeyResponse {
+	string user_id = 1;
+	string device_id = 2;
+	string status = 3;
+	string message = 4;
+}
+
+message GetManagedKeyRequest {
+	string user_id = 1;
+	string device_id = 2;
+	string key_type = 3; // "customer" or "system"
+}
+
+message GetManagedKeyResponse {
+	ManagedKeyInfo key = 1;
+	bool found = 2;
+}
+
+message ListManagedKeysRequest {
+	string user_id = 1; // Optional filter by user
+	string key_type = 2; // Optional filter: "customer", "system", or empty for all
+}
+
+message ListManagedKeysResponse {
+	repeated ManagedKeyInfo keys = 1;
+}
+
+// System Managed Key Messages - private/public keys generated by system
+message CreateSystemManagedKeysRequest {
+	string user_id = 1;
+	string device_id = 2;
+	string key_name = 3;
+}
+
+message CreateSystemManagedKeysResponse {
+	string user_id = 1;
+	string device_id = 2;
+	string xpub = 3;
+	string fingerprint = 4;
+	string derivation_path = 5;
+	string status = 6;
+	string message = 7;
+}
+
+enum PolicyType {
+	SINGLE = 0; // Single signature
+	MULTI = 1;  // Multi-signature
+}
+
+enum PreferredScriptType {
+	SCRIPT_TYPE_AUTO = 0;
+	SCRIPT_TYPE_TAPROOT = 1;
+	SCRIPT_TYPE_SEGWIT_V0 = 2;
+}
+
+message SpendingCondition {
+	string id = 1; // Unique identifier for this spending condition
+	bool is_primary = 2; // Whether this is the primary spending path
+	uint32 timelock = 3; // Timelock in blocks
+	uint32 threshold = 4; // Threshold for multi-sig
+	PolicyType policy = 5; // Single or Multi
+	repeated string managed_key_ids = 6; // List of managed key IDs
+}
+
+message CreateGenericWalletRequest {
+	string user_id = 1;
+	string wallet_id = 2;
+	repeated SpendingCondition spending_conditions = 3;
+	string network = 4; // "mainnet", "testnet", "regtest"
+	PreferredScriptType preferred_script_type = 5;
+}
+
+
+message CreateGenericWalletResponse {
+	string wallet_id = 1;
+	string external_descriptor = 2; // Bitcoin descriptor (BIP-388)
+	string internal_descriptor = 3; // Bitcoin descriptor (BIP-388)
+	string status = 4;
+	string message = 5;
+	repeated TaprootLeafInfo taproot_leaf_info = 6;
+	string merkle_root = 7; // Hex-encoded taproot merkle root
+	string internal_key = 8; // Hex-encoded internal pubkey
+}
+
+// Taproot spending path information
+message TaprootLeafInfo {
+	string leaf_hash = 1; // Hex-encoded taproot leaf hash
+	string spending_condition_id = 2; // Unique identifier for this spending condition
+	repeated string script_path = 3; // Hex-encoded merkle path to this leaf
+	uint32 timelock = 4; // CSV timelock in blocks (if applicable)
+	string policy_type = 5; // "single" or "multi"
+	uint32 threshold = 6; // For multi-sig policies
+	string description = 7; // Human-readable description
+}
+
+// Get available spending paths for a taproot wallet
+message GetWalletSpendingPathsRequest {
+	string wallet_id = 1;
+}
+
+message GetWalletSpendingPathsResponse {
+	repeated TaprootLeafInfo spending_paths = 1;
+	string merkle_root = 2;
+	string internal_key = 3;
+	bool is_taproot = 4;
+}

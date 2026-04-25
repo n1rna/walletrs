@@ -1,0 +1,61 @@
+[package]
+name = "walletrs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+description = "Standalone gRPC service for advanced Bitcoin wallets — multisig, miniscript policies, taproot leaf-hash spends."
+repository = "https://github.com/n1rna/walletrs"
+readme = "../../README.md"
+
+[dependencies]
+tonic = "0.9"
+prost = "0.11"
+tokio = { version = "1.0", features = ["full"] }
+bdk = "0.30.1"
+bdk_wallet = { version = "1.1.0", features = ["file_store", "bip39", "keys-bip39"] }
+bdk_file_store = "0.18.1"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bitcoin = "0.30"
+log = "0.4"
+hex = "0.4.3"
+chrono = "0.4.40"
+env_logger = "0.11.6"
+tonic-reflection = "0.12.3"
+bdk_electrum = "0.21.0"
+clap = { version = "4.5.3", features = ["derive"] }
+uuid = { version = "1.7.0", features = ["v4"] }
+prettytable-rs = "0.10.0"
+regex = "1.11.1"
+thiserror = "2.0"
+liana = { path = "../../contrib/liana" }
+miniscript = { version = "12.0", features = ["serde", "compiler", "base64"] }
+tower = "0.4"
+hyper = "0.14"
+futures = "0.3"
+once_cell = "1.20"
+parking_lot = { version = "0.12", features = ["arc_lock"] }
+chacha20poly1305 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+aws-config = { version = "1.5", features = ["behavior-version-latest"] }
+aws-sdk-s3 = { version = "1.60", features = ["behavior-version-latest"] }
+aws-credential-types = "1.2"
+aws-smithy-runtime-api = "1.7"
+
+[[bin]]
+name = "walletrs"
+path = "src/main.rs"
+
+[[bin]]
+name = "walletrs-cli"
+path = "src/bin/cli.rs"
+
+[lib]
+name = "walletrs_lib"
+path = "src/lib.rs"
+
+[build-dependencies]
+tonic-build = "*"
