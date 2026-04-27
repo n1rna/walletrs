@@ -1,7 +1,7 @@
-//! Persistent bidirectional stream client + reconnect loop.
+//! Persistent WebSocket client + reconnect loop.
 //!
-//! The agent opens a single long-lived `OpenStream` bidi gRPC connection to
-//! sigvault. The handshake is:
+//! The agent opens one long-lived WebSocket connection to sigvault at
+//! `wss://<endpoint>/api/v2/walletrs/agent/connect`. The handshake is:
 //!
 //! 1. Agent → server : `AgentHello { agent_id, walletrs_version }`
 //! 2. Server → agent : `AgentChallenge { nonce }` (32 random bytes)
@@ -16,30 +16,25 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tonic::transport::{Channel, Endpoint};
-use tonic::Request;
-
-use crate::proto::pb::agent_message::Body;
-use crate::proto::pb::walletrs_agent_client::WalletrsAgentClient;
-use crate::proto::pb::{
-    AgentChallengeResponse, AgentHeartbeat, AgentHello, AgentMessage, OperationRequest,
-};
+use tokio_tungstenite::tungstenite::Message;
 
 use super::dispatcher;
 use super::error::AgentError;
 use super::keypair::AgentKeypair;
 use super::state::AgentState;
+use super::wire::{
+    AgentChallengeResponse, AgentHeartbeat, AgentHello, AgentMessage, OperationRequest,
+};
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(2);
 const MAX_BACKOFF: Duration = Duration::from_secs(120);
 const SEND_BUFFER: usize = 64;
 
 /// Run the connect loop forever. Reconnects with exponential backoff on any
-/// session failure. Returns only when the future is cancelled (e.g. on
-/// process shutdown via `tokio::select!`).
+/// session failure.
 pub async fn run_forever(state: AgentState, keypair: AgentKeypair) {
     let mut backoff = INITIAL_BACKOFF;
 
@@ -66,70 +61,96 @@ pub async fn run_forever(state: AgentState, keypair: AgentKeypair) {
 }
 
 async fn run_session(state: &AgentState, keypair: &AgentKeypair) -> Result<(), AgentError> {
-    let channel = build_channel(&state.endpoint).await?;
-    let mut client = WalletrsAgentClient::new(channel);
+    let ws_url = build_ws_url(&state.endpoint)?;
+    debug!("connecting agent WebSocket: {}", ws_url);
 
-    let (tx, rx) = mpsc::channel::<AgentMessage>(SEND_BUFFER);
-    let outbound = ReceiverStream::new(rx);
-    let response = client
-        .open_stream(Request::new(outbound))
+    let (ws, _resp) = tokio_tungstenite::connect_async(&ws_url)
         .await
-        .map_err(|e| AgentError::Transport(format!("open_stream: {}", e)))?;
-    let mut inbound = response.into_inner();
+        .map_err(|e| AgentError::Transport(format!("ws connect: {}", e)))?;
+
+    let (mut sink, mut stream) = ws.split();
+
+    // Outbound channel — single-writer to the WS sink.
+    let (tx, mut rx) = mpsc::channel::<AgentMessage>(SEND_BUFFER);
+    let writer = tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            let json = match serde_json::to_string(&msg) {
+                Ok(j) => j,
+                Err(e) => {
+                    error!("encode AgentMessage: {}", e);
+                    break;
+                }
+            };
+            if let Err(e) = sink.send(Message::Text(json)).await {
+                debug!("ws sink send failed (likely peer closed): {}", e);
+                break;
+            }
+        }
+        let _ = sink.close().await;
+    });
 
     // 1. Hello
     send(
         &tx,
-        AgentMessage {
-            body: Some(Body::Hello(AgentHello {
-                agent_id: state.agent_id.clone(),
-                walletrs_version: env!("CARGO_PKG_VERSION").to_string(),
-            })),
-        },
+        AgentMessage::Hello(AgentHello {
+            agent_id: state.agent_id.clone(),
+            walletrs_version: env!("CARGO_PKG_VERSION").to_string(),
+        }),
     )
     .await?;
 
     // 2. Receive challenge
-    let challenge = recv_challenge(&mut inbound).await?;
+    let challenge = match recv(&mut stream).await? {
+        AgentMessage::Challenge(c) => c.nonce,
+        other => {
+            return Err(AgentError::Challenge(format!(
+                "expected challenge, got {:?}",
+                other
+            )));
+        }
+    };
 
     // 3. Sign + respond
     send(
         &tx,
-        AgentMessage {
-            body: Some(Body::ChallengeResponse(AgentChallengeResponse {
-                signature: keypair.sign(&challenge),
-            })),
-        },
+        AgentMessage::ChallengeResponse(AgentChallengeResponse {
+            signature: keypair.sign(&challenge),
+        }),
     )
     .await?;
 
     // 4. Wait for ready
-    expect_ready(&mut inbound).await?;
+    match recv(&mut stream).await? {
+        AgentMessage::Ready(_) => (),
+        other => {
+            return Err(AgentError::Challenge(format!(
+                "expected ready, got {:?}",
+                other
+            )));
+        }
+    }
     info!("agent connected — awaiting operations");
 
     // 5. Operation loop
-    while let Some(msg) = inbound
-        .message()
-        .await
-        .map_err(|e| AgentError::Loop(format!("recv: {}", e)))?
-    {
-        let Some(body) = msg.body else {
-            continue;
+    while let Some(frame) = stream.next().await {
+        let frame = frame.map_err(|e| AgentError::Loop(format!("ws recv: {}", e)))?;
+        let msg = match parse_frame(frame) {
+            ParsedFrame::Message(m) => m,
+            ParsedFrame::Skip => continue,
+            ParsedFrame::Close => break,
         };
-        match body {
-            Body::OperationRequest(op) => {
+
+        match msg {
+            AgentMessage::OperationRequest(op) => {
                 let tx = tx.clone();
                 tokio::spawn(handle_operation(tx, op));
             }
-            Body::Heartbeat(_) => {
-                // Echo a heartbeat back so sigvault can measure round-trip.
+            AgentMessage::Heartbeat(_) => {
                 let _ = send(
                     &tx,
-                    AgentMessage {
-                        body: Some(Body::Heartbeat(AgentHeartbeat {
-                            sent_at_unix_ms: now_unix_ms(),
-                        })),
-                    },
+                    AgentMessage::Heartbeat(AgentHeartbeat {
+                        sent_at_unix_ms: now_unix_ms(),
+                    }),
                 )
                 .await;
             }
@@ -142,6 +163,8 @@ async fn run_session(state: &AgentState, keypair: &AgentKeypair) -> Result<(), A
         }
     }
 
+    drop(tx);
+    let _ = writer.await;
     Ok(())
 }
 
@@ -153,53 +176,8 @@ async fn handle_operation(tx: mpsc::Sender<AgentMessage>, op: OperationRequest) 
     );
     let result = dispatcher::dispatch(&op.method, &op.payload).await;
     let response = dispatcher::build_response(&request_id, result);
-    debug!(
-        "dispatch end request_id={} status={}",
-        request_id,
-        response.status.as_ref().map(|s| s.code).unwrap_or(0)
-    );
-
-    if let Err(e) = tx
-        .send(AgentMessage {
-            body: Some(Body::OperationResponse(response)),
-        })
-        .await
-    {
+    if let Err(e) = tx.send(AgentMessage::OperationResponse(response)).await {
         error!("failed to send operation response: {}", e);
-    }
-}
-
-async fn recv_challenge(
-    inbound: &mut tonic::Streaming<AgentMessage>,
-) -> Result<Vec<u8>, AgentError> {
-    let msg = inbound
-        .message()
-        .await
-        .map_err(|e| AgentError::Transport(format!("recv challenge: {}", e)))?
-        .ok_or_else(|| AgentError::Challenge("stream closed before challenge".into()))?;
-
-    match msg.body {
-        Some(Body::Challenge(c)) => Ok(c.nonce),
-        other => Err(AgentError::Challenge(format!(
-            "expected AgentChallenge, got {:?}",
-            other
-        ))),
-    }
-}
-
-async fn expect_ready(inbound: &mut tonic::Streaming<AgentMessage>) -> Result<(), AgentError> {
-    let msg = inbound
-        .message()
-        .await
-        .map_err(|e| AgentError::Transport(format!("recv ready: {}", e)))?
-        .ok_or_else(|| AgentError::Challenge("stream closed before ready".into()))?;
-
-    match msg.body {
-        Some(Body::Ready(_)) => Ok(()),
-        other => Err(AgentError::Challenge(format!(
-            "expected AgentReady, got {:?}",
-            other
-        ))),
     }
 }
 
@@ -209,12 +187,72 @@ async fn send(tx: &mpsc::Sender<AgentMessage>, msg: AgentMessage) -> Result<(), 
         .map_err(|e| AgentError::Transport(format!("outbound send: {}", e)))
 }
 
-async fn build_channel(endpoint: &str) -> Result<Channel, AgentError> {
-    Endpoint::from_shared(endpoint.to_string())
-        .map_err(|e| AgentError::Transport(format!("invalid endpoint {}: {}", endpoint, e)))?
-        .connect()
-        .await
-        .map_err(|e| AgentError::Transport(format!("dial {}: {}", endpoint, e)))
+async fn recv<S>(stream: &mut S) -> Result<AgentMessage, AgentError>
+where
+    S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    loop {
+        let frame = stream
+            .next()
+            .await
+            .ok_or_else(|| AgentError::Transport("ws closed during handshake".into()))?
+            .map_err(|e| AgentError::Transport(format!("ws recv: {}", e)))?;
+
+        match parse_frame(frame) {
+            ParsedFrame::Message(m) => return Ok(m),
+            ParsedFrame::Skip => continue,
+            ParsedFrame::Close => {
+                return Err(AgentError::Transport("ws closed during handshake".into()))
+            }
+        }
+    }
+}
+
+enum ParsedFrame {
+    Message(AgentMessage),
+    Skip,
+    Close,
+}
+
+fn parse_frame(frame: Message) -> ParsedFrame {
+    match frame {
+        Message::Text(text) => match serde_json::from_str::<AgentMessage>(&text) {
+            Ok(msg) => ParsedFrame::Message(msg),
+            Err(e) => {
+                warn!("malformed agent message frame: {}", e);
+                ParsedFrame::Skip
+            }
+        },
+        Message::Binary(_) => {
+            warn!("ignoring unexpected binary ws frame");
+            ParsedFrame::Skip
+        }
+        Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => ParsedFrame::Skip,
+        Message::Close(_) => ParsedFrame::Close,
+    }
+}
+
+fn build_ws_url(endpoint: &str) -> Result<String, AgentError> {
+    let url = url::Url::parse(endpoint)
+        .map_err(|e| AgentError::Transport(format!("invalid endpoint {}: {}", endpoint, e)))?;
+    let scheme = match url.scheme() {
+        "https" => "wss",
+        "http" => "ws",
+        other => {
+            return Err(AgentError::Transport(format!(
+                "unsupported endpoint scheme: {}",
+                other
+            )));
+        }
+    };
+    let host = url
+        .host_str()
+        .ok_or_else(|| AgentError::Transport(format!("endpoint has no host: {}", endpoint)))?;
+    let port = url.port().map(|p| format!(":{}", p)).unwrap_or_default();
+    Ok(format!(
+        "{}://{}{}/api/v2/walletrs/agent/connect",
+        scheme, host, port
+    ))
 }
 
 fn now_unix_ms() -> i64 {
@@ -222,4 +260,39 @@ fn now_unix_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_ws_url_https_to_wss() {
+        let result = build_ws_url("https://api.sigvault.org").unwrap();
+        assert_eq!(
+            result,
+            "wss://api.sigvault.org/api/v2/walletrs/agent/connect"
+        );
+    }
+
+    #[test]
+    fn build_ws_url_http_to_ws() {
+        let result = build_ws_url("http://localhost:8000").unwrap();
+        assert_eq!(result, "ws://localhost:8000/api/v2/walletrs/agent/connect");
+    }
+
+    #[test]
+    fn build_ws_url_strips_trailing_slash() {
+        let result = build_ws_url("https://api.sigvault.org/").unwrap();
+        assert_eq!(
+            result,
+            "wss://api.sigvault.org/api/v2/walletrs/agent/connect"
+        );
+    }
+
+    #[test]
+    fn build_ws_url_rejects_unsupported_scheme() {
+        assert!(build_ws_url("ftp://example.com").is_err());
+        assert!(build_ws_url("not-a-url").is_err());
+    }
 }

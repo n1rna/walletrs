@@ -1,12 +1,13 @@
 //! Sigvault agent — outbound reverse-tunnel client.
 //!
-//! When started with a pairing token (`--sigvault-token` / `WALLETRS_SIGVAULT_TOKEN`),
-//! walletrs generates an Ed25519 keypair, registers the public key with sigvault
-//! via the `Pair` RPC, persists the credentials to disk, and opens a persistent
-//! `OpenStream` bidirectional gRPC connection. Sigvault sends operation
-//! requests over that stream; the agent dispatches them to the same internal
-//! handlers used by the local gRPC server, and replies with the encoded
-//! response.
+//! When started with a pairing token (`--sigvault-token` /
+//! `WALLETRS_SIGVAULT_TOKEN`), walletrs generates an Ed25519 keypair,
+//! registers the public key with sigvault via an HTTP `POST /agent/pair`,
+//! persists the credentials to disk, and opens a persistent WebSocket
+//! at `/agent/connect`. Sigvault sends operation requests over that
+//! WebSocket; the agent dispatches them to the same internal handlers
+//! used by the local gRPC server, and replies with the encoded response
+//! (prost-encoded payload bytes wrapped in a JSON envelope).
 //!
 //! Architecture and decisions are documented in
 //! `docs/plans/walletrs-open-source.md` (sigvault repo) Phase 5.
@@ -17,6 +18,7 @@ pub mod error;
 pub mod keypair;
 pub mod pair;
 pub mod state;
+pub mod wire;
 
 pub use error::AgentError;
 pub use keypair::AgentKeypair;

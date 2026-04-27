@@ -1,9 +1,9 @@
 //! Tunneled operation dispatch.
 //!
-//! Sigvault sends an `OperationRequest { method, payload }` over the bidi
-//! stream. We decode `payload` into the proto request type that matches the
-//! method name, call the same internal handler the local gRPC server uses,
-//! and re-encode the response.
+//! Sigvault sends an `OperationRequest { method, payload }` over the
+//! WebSocket. We decode `payload` (prost-encoded) into the proto request
+//! type that matches the method name, call the same internal handler the
+//! local gRPC server uses, and re-encode the response.
 //!
 //! The agent therefore does not maintain a parallel handler implementation —
 //! adding a new RPC to `WalletService` only requires extending the dispatch
@@ -13,10 +13,11 @@ use prost::Message;
 use tonic::{Request, Status};
 
 use crate::proto::pb::*;
-use crate::proto::pb::{OperationResponse, OperationStatus};
 use crate::wallet::service::{
     key_management, system, transaction_handling, wallet_creation, wallet_operations,
 };
+
+use super::wire::{OperationResponse, OperationStatus};
 
 /// Decode + dispatch + encode. Returns the response payload bytes on
 /// success, or a tonic `Status` on any handler / decode / unknown-method
@@ -113,24 +114,24 @@ pub async fn dispatch(method: &str, payload: &[u8]) -> Result<Vec<u8>, Status> {
 }
 
 /// Convenience wrapper that turns a `Result<Vec<u8>, Status>` into a wire
-/// `OperationResponse`. Errors are encoded as `OperationStatus.code != 0`
-/// with the gRPC status code preserved.
+/// `OperationResponse`. Errors are encoded as `status.code != 0` with the
+/// gRPC status code preserved.
 pub fn build_response(request_id: &str, result: Result<Vec<u8>, Status>) -> OperationResponse {
     match result {
         Ok(payload) => OperationResponse {
             request_id: request_id.to_string(),
-            status: Some(OperationStatus {
+            status: OperationStatus {
                 code: 0,
                 message: String::new(),
-            }),
+            },
             payload,
         },
         Err(status) => OperationResponse {
             request_id: request_id.to_string(),
-            status: Some(OperationStatus {
+            status: OperationStatus {
                 code: status.code() as i32,
                 message: status.message().to_string(),
-            }),
+            },
             payload: Vec::new(),
         },
     }
@@ -168,7 +169,7 @@ mod tests {
     fn build_response_ok() {
         let resp = build_response("req-1", Ok(vec![1, 2, 3]));
         assert_eq!(resp.request_id, "req-1");
-        assert_eq!(resp.status.as_ref().unwrap().code, 0);
+        assert_eq!(resp.status.code, 0);
         assert_eq!(resp.payload, vec![1, 2, 3]);
     }
 
@@ -176,9 +177,8 @@ mod tests {
     fn build_response_err() {
         let resp = build_response("req-2", Err(Status::not_found("missing")));
         assert_eq!(resp.request_id, "req-2");
-        let status = resp.status.unwrap();
-        assert_eq!(status.code, tonic::Code::NotFound as i32);
-        assert_eq!(status.message, "missing");
+        assert_eq!(resp.status.code, tonic::Code::NotFound as i32);
+        assert_eq!(resp.status.message, "missing");
         assert!(resp.payload.is_empty());
     }
 }
