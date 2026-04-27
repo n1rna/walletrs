@@ -10,7 +10,7 @@ use walletrs_lib::wallet::service::auth::{AuthLayer, AuthMode};
 use walletrs_lib::wallet::service::middleware::LoggingLayer;
 use walletrs_lib::wallet::service::WalletRPC;
 
-const DEFAULT_SIGVAULT_ENDPOINT: &str = "https://api.sigvault.example";
+const DEFAULT_SIGVAULT_ENDPOINT: &str = "https://api.sigvault.org";
 
 #[derive(Parser, Debug)]
 #[command(

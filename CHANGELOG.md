@@ -4,9 +4,13 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [Unreleased]
 
+### Changed
+
+- **Sigvault agent transport now HTTP + WebSocket** instead of gRPC bidi streaming. `Pair` is `POST /api/v2/walletrs/agent/pair`; the operation stream is `WS /api/v2/walletrs/agent/connect`. The JSON envelope wraps prost-encoded operation payloads (no double-encoding of walletrpc messages). Drops the `WalletrsAgent` gRPC service from `proto/walletrpc.proto`; agent message types live as serde structs in `crates/server/src/agent/wire.rs`. Reasoning: lets sigvault's broker live as a regular FastAPI route inside the existing api process — no second port, no grpc.aio runtime, no separate broker container. Walletrs gains `reqwest` + `tokio-tungstenite` + `futures-util` + `url` deps and drops `tokio-stream`. Default sigvault endpoint flipped from `https://api.sigvault.example` to `https://api.sigvault.org`.
+
 ### Added
 
-- **Sigvault agent (BYO walletrs).** Outbound reverse-tunnel client that lets a user-hosted walletrs instance pair with a cloud sigvault deployment. Pairing via one-shot token (`--sigvault-token` / `WALLETRS_SIGVAULT_TOKEN`) generates a local Ed25519 keypair (private key envelope-encrypted under `WALLETRS_KEK`) and exchanges it for a stable `agent_id`. Persistent bidirectional gRPC stream re-authenticates on every reconnect via signed challenge nonce. Operations from sigvault are dispatched through the same internal handlers as the local gRPC server — no parallel codegen path. Ships disabled by default; existing standalone deployments are unaffected. New `WalletrsAgent` service + envelope messages added to `proto/walletrpc.proto`.
+- **Sigvault agent (BYO walletrs).** Outbound reverse-tunnel client that lets a user-hosted walletrs instance pair with a cloud sigvault deployment. Pairing via one-shot token (`--sigvault-token` / `WALLETRS_SIGVAULT_TOKEN`) generates a local Ed25519 keypair (private key envelope-encrypted under `WALLETRS_KEK`) and exchanges it for a stable `agent_id`. Persistent WebSocket re-authenticates on every reconnect via signed challenge nonce. Operations from sigvault are dispatched through the same internal handlers as the local gRPC server — no parallel codegen path. Ships disabled by default; existing standalone deployments are unaffected.
 - Bearer-token gRPC auth interceptor (`Authorization: Bearer <token>`); auto-generates a token at first boot when `WALLETRS_AUTH_TOKEN` is unset and logs it once with a `STORE THIS` prefix. `WALLETRS_AUTH_DISABLED=1` opts out.
 - Multi-stage `Dockerfile` (cargo-chef) producing a `debian:bookworm-slim` runtime image.
 - `docker-compose.yml` regtest stack (`lncm/bitcoind:v25.0` + `mempool/electrs:latest` + walletrs).
