@@ -96,9 +96,10 @@ mod tests {
     }
 
     fn router_with_auth(mode: AuthMode) -> Router {
-        http_router(Arc::new(WalletRPC::default())).layer(
-            axum::middleware::from_fn_with_state(mode, http_auth_middleware),
-        )
+        http_router(Arc::new(WalletRPC::default())).layer(axum::middleware::from_fn_with_state(
+            mode,
+            http_auth_middleware,
+        ))
     }
 
     async fn body_to_string(resp: Response) -> String {
@@ -188,13 +189,19 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let body = body_to_string(resp).await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["code"], serde_json::json!(tonic::Code::InvalidArgument as i32));
+        assert_eq!(
+            v["code"],
+            serde_json::json!(tonic::Code::InvalidArgument as i32)
+        );
         assert_eq!(v["message"], serde_json::json!("bad input"));
     }
 
     #[tokio::test]
     async fn ping_route_returns_empty_response() {
-        let resp = router().oneshot(json_post("/wallet/ping", "{}")).await.unwrap();
+        let resp = router()
+            .oneshot(json_post("/wallet/ping", "{}"))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = body_to_string(resp).await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();

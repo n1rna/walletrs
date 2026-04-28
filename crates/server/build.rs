@@ -9,16 +9,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("proto root not found at {}: {}", proto_root.display(), e))?;
 
     let walletrpc = proto_root.join("walletrpc.proto");
-    let walletrpc = walletrpc
-        .canonicalize()
-        .map_err(|e| format!("walletrpc.proto not found at {}: {}", walletrpc.display(), e))?;
+    let walletrpc = walletrpc.canonicalize().map_err(|e| {
+        format!(
+            "walletrpc.proto not found at {}: {}",
+            walletrpc.display(),
+            e
+        )
+    })?;
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
     let descriptor_path = out_dir.join("walletrpc.bin");
 
+    let mut includes: Vec<PathBuf> = vec![proto_root.clone()];
+    if let Some(p) = protoc_include_dir() {
+        includes.push(p);
+    }
+    let include_refs: Vec<&Path> = includes.iter().map(PathBuf::as_path).collect();
+
     tonic_build::configure()
         .file_descriptor_set_path(&descriptor_path)
-        .compile(&[walletrpc.as_path()], &[proto_root.as_path()])?;
+        .compile(&[walletrpc.as_path()], &include_refs)?;
 
     let descriptor_bytes = std::fs::read(&descriptor_path)?;
     pbjson_build::Builder::new()
@@ -67,14 +77,8 @@ fn generate_http_router(
             }
 
             let rust_method = camel_to_snake(method.name());
-            let req_type = method
-                .input()
-                .name()
-                .to_string();
-            let resp_type = method
-                .output()
-                .name()
-                .to_string();
+            let req_type = method.input().name().to_string();
+            let resp_type = method.output().name().to_string();
             let handler = format!("{}_handler", rust_method);
 
             routes.push(Route {
@@ -148,6 +152,26 @@ fn extract_verb_path(
         }
     }
     Err("no HTTP verb set on HttpRule".into())
+}
+
+fn protoc_include_dir() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("PROTOC_INCLUDE") {
+        let path = PathBuf::from(p);
+        if path.join("google/protobuf/descriptor.proto").exists() {
+            return Some(path);
+        }
+    }
+    for candidate in [
+        "/usr/include",
+        "/usr/local/include",
+        "/opt/homebrew/include",
+    ] {
+        let path = PathBuf::from(candidate);
+        if path.join("google/protobuf/descriptor.proto").exists() {
+            return Some(path);
+        }
+    }
+    None
 }
 
 fn camel_to_snake(s: &str) -> String {

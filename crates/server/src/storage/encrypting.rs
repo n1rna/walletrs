@@ -63,7 +63,8 @@ mod tests {
     fn round_trip_through_disk() {
         let dir = tempfile::tempdir().unwrap();
         let b = backend(&dir);
-        b.write_bytes("a/b/secret.bin", b"plaintext payload").unwrap();
+        b.write_bytes("a/b/secret.bin", b"plaintext payload")
+            .unwrap();
         let got = b.read_bytes("a/b/secret.bin").unwrap();
         assert_eq!(got, b"plaintext payload");
     }
