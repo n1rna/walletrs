@@ -13,7 +13,7 @@ RUN cargo install cargo-chef --locked --version ^0.1
 WORKDIR /usr/src/app
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends protobuf-compiler \
+ && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev \
  && rm -rf /var/lib/apt/lists/*
 
 # ── Planner: compute the dep graph into recipe.json ──────────────────────

@@ -31,7 +31,7 @@ jobs:
       - name: install protoc
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends protobuf-compiler
+          sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
       # Strictness comes from `[lints]` in `crates/server/Cargo.toml` — that
       # way the vendored `contrib/liana` crate isn't held to our standard.
       # `--no-deps` keeps clippy quiet about transitive dep warnings too.
@@ -47,7 +47,7 @@ jobs:
       - name: install protoc
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends protobuf-compiler
+          sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
       - run: cargo test --workspace --no-fail-fast
 
   docker:
