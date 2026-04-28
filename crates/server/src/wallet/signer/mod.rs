@@ -545,12 +545,13 @@ mod tests {
     use bdk_wallet::bitcoin::Network;
     use bdk_wallet::Wallet;
 
-    use crate::db::StoredManagedKey;
     use crate::wallet::advanced::shape::WalletShape;
     use crate::wallet::advanced::{descriptor, shape, taproot};
-    use crate::wallet::advanced::{PolicyType, PreferredScriptType, SpendingCondition, WalletSpec};
+    use crate::wallet::advanced::{
+        ManagedKey, PolicyType, PreferredScriptType, SpendingCondition, WalletSpec,
+    };
 
-    fn make_key(seed: u64) -> StoredManagedKey {
+    fn make_key(seed: u64) -> (String, ManagedKey) {
         let mut bytes = [0u8; 64];
         bytes[..8].copy_from_slice(&seed.to_le_bytes());
         let secp = Secp256k1::new();
@@ -558,13 +559,14 @@ mod tests {
         let xpub = Xpub::from_priv(&secp, &xpriv);
         let fp = format!("{:08x}", xpriv.fingerprint(&secp));
         let liana_xpub = format!("[{}]{}/<0;1>/*", fp, xpub);
-        StoredManagedKey::new_customer_key(
-            "user-1",
-            &format!("d{}", seed),
-            "test",
-            &liana_xpub,
-            &fp,
-            "m/84'/1'/0'",
+        (
+            format!("d{}", seed),
+            ManagedKey {
+                fingerprint: fp,
+                derivation_path: "m/84'/1'/0'".to_string(),
+                xpub: liana_xpub,
+                tpub: None,
+            },
         )
     }
 
@@ -573,14 +575,14 @@ mod tests {
         crate::LianaDescriptor,
         Vec<crate::wallet::advanced::TaprootLeafInfo>,
     ) {
-        let k1 = make_key(1);
-        let k2 = make_key(2);
-        let k3 = make_key(3);
+        let (id1, k1) = make_key(1);
+        let (id2, k2) = make_key(2);
+        let (id3, k3) = make_key(3);
 
         let mut keys = BTreeMap::new();
-        keys.insert(k1.device_id.clone(), k1);
-        keys.insert(k2.device_id.clone(), k2);
-        keys.insert(k3.device_id.clone(), k3);
+        keys.insert(id1, k1);
+        keys.insert(id2, k2);
+        keys.insert(id3, k3);
 
         let spec = WalletSpec {
             network: Network::Testnet,

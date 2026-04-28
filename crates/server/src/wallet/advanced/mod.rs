@@ -1,34 +1,24 @@
 //! Advanced wallet building.
 //!
-//! Pipeline:
-//!
-//! ```text
-//! WalletSpec  →  classify()  →  WalletShape
-//!     ↓                              ↓
-//! validate                       descriptor::build
-//!                                    ↓
-//!                              DescriptorPair  →  BdkWalletManager::create
-//!                                    ↓
-//!                              taproot::extract  (only for TimelockedPolicy)
-//!                                    ↓
-//!                              WalletBuildResult
-//! ```
-//!
-//! Each stage lives in its own module; `build_wallet` is the only function
-//! callers need to wire up an end-to-end create-wallet RPC.
+//! Pure pipeline (spec → shape → descriptor → taproot metadata) lives in the
+//! `policy-core` crate and is re-exported here for source-compatibility with
+//! existing service code. The local `build` module is the BDK-bound
+//! orchestrator that calls into `policy-core` then drives `BdkWalletManager`
+//! to persist the wallet.
 
 pub mod build;
-pub mod descriptor;
 pub mod error;
-pub mod shape;
-pub mod spec;
-pub mod taproot;
 
-#[cfg(test)]
-mod tests;
+pub use policy_core::descriptor;
+pub use policy_core::shape;
+pub use policy_core::spec;
+pub use policy_core::taproot;
+
+pub use policy_core::{
+    DescriptorPair, ManagedKey, PolicyError, PolicyPath, PolicyType, PreferredScriptType,
+    RecoveryPath, ScriptKind, SpendingCondition, TaprootLeafInfo, TaprootMetadata, WalletShape,
+    WalletSpec,
+};
 
 pub use build::{build_wallet, WalletBuildResult};
 pub use error::WalletCreationError;
-pub use shape::{classify, PolicyPath, RecoveryPath, ScriptKind, WalletShape};
-pub use spec::{PolicyType, PreferredScriptType, SpendingCondition, WalletSpec};
-pub use taproot::{TaprootLeafInfo, TaprootMetadata};

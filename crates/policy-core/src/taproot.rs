@@ -21,11 +21,11 @@ use bdk_wallet::bitcoin::bip32::{ChildNumber, Fingerprint};
 use bdk_wallet::bitcoin::hashes::Hash;
 use bdk_wallet::bitcoin::psbt::Input as PsbtInput;
 use bdk_wallet::bitcoin::secp256k1::Secp256k1;
+use liana::descriptors::LianaDescriptor;
 
-use crate::wallet::advanced::error::WalletCreationError;
-use crate::wallet::advanced::shape::{PolicyPath, RecoveryPath};
-use crate::wallet::advanced::spec::PolicyType;
-use crate::LianaDescriptor;
+use crate::error::PolicyError;
+use crate::shape::{PolicyPath, RecoveryPath};
+use crate::spec::PolicyType;
 
 #[derive(Debug, Clone)]
 pub struct TaprootLeafInfo {
@@ -50,7 +50,7 @@ pub fn extract(
     primary: &PolicyPath,
     recoveries: &[RecoveryPath],
     descriptor: &LianaDescriptor,
-) -> Result<TaprootMetadata, WalletCreationError> {
+) -> Result<TaprootMetadata, PolicyError> {
     if !descriptor.is_taproot() {
         return Ok(TaprootMetadata::default());
     }
@@ -75,7 +75,7 @@ pub fn extract(
 
     for recovery in recoveries.iter() {
         let leaf_hash = leaf_hash_for_path(&recovery.path, &fp_to_leaves).ok_or_else(|| {
-            WalletCreationError::DescriptorGeneration(format!(
+            PolicyError::DescriptorGeneration(format!(
                 "Failed to extract taproot leaf hash for recovery condition `{}`",
                 recovery.id
             ))
@@ -93,7 +93,7 @@ pub fn extract(
 
     if primary_in_taptree {
         let leaf_hash = leaf_hash_for_path(primary, &fp_to_leaves).ok_or_else(|| {
-            WalletCreationError::DescriptorGeneration(format!(
+            PolicyError::DescriptorGeneration(format!(
                 "Failed to extract taproot leaf hash for primary condition `{}`",
                 primary_id
             ))
@@ -116,12 +116,10 @@ pub fn extract(
     })
 }
 
-fn populate_dummy_psbt_input(
-    descriptor: &LianaDescriptor,
-) -> Result<PsbtInput, WalletCreationError> {
+fn populate_dummy_psbt_input(descriptor: &LianaDescriptor) -> Result<PsbtInput, PolicyError> {
     let secp = Secp256k1::verification_only();
     let child = ChildNumber::from_normal_idx(0).map_err(|e| {
-        WalletCreationError::DescriptorGeneration(format!("Failed to build child number: {}", e))
+        PolicyError::DescriptorGeneration(format!("Failed to build child number: {}", e))
     })?;
     let derived = descriptor.receive_descriptor().derive(child, &secp);
 

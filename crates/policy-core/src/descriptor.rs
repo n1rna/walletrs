@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
+use liana::descriptors::{LianaDescriptor, LianaPolicy, PathInfo};
 use miniscript::descriptor::DescriptorPublicKey;
 
-use crate::wallet::advanced::error::WalletCreationError;
-use crate::wallet::advanced::shape::{PolicyPath, RecoveryPath, ScriptKind, WalletShape};
-use crate::{LianaDescriptor, LianaPolicy, PathInfo};
+use crate::error::PolicyError;
+use crate::shape::{PolicyPath, RecoveryPath, ScriptKind, WalletShape};
 
 /// Output of descriptor construction. `external` is the receive descriptor,
 /// `internal` is the change descriptor. `liana` is populated only for the
@@ -22,7 +22,7 @@ pub struct DescriptorPair {
 /// take the script path.
 const NUMS_KEY: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
 
-pub fn build(shape: &WalletShape) -> Result<DescriptorPair, WalletCreationError> {
+pub fn build(shape: &WalletShape) -> Result<DescriptorPair, PolicyError> {
     match shape {
         WalletShape::SingleSig {
             kind: ScriptKind::SegwitV0,
@@ -50,18 +50,18 @@ pub fn build(shape: &WalletShape) -> Result<DescriptorPair, WalletCreationError>
     }
 }
 
-fn single_sig_segwit(key: &DescriptorPublicKey) -> Result<DescriptorPair, WalletCreationError> {
+fn single_sig_segwit(key: &DescriptorPublicKey) -> Result<DescriptorPair, PolicyError> {
     Ok(pair_from_keys(&[key], |k| format!("wpkh({})", k)))
 }
 
-fn single_sig_taproot(key: &DescriptorPublicKey) -> Result<DescriptorPair, WalletCreationError> {
+fn single_sig_taproot(key: &DescriptorPublicKey) -> Result<DescriptorPair, PolicyError> {
     Ok(pair_from_keys(&[key], |k| format!("tr({})", k)))
 }
 
 fn multisig_segwit(
     threshold: usize,
     keys: &[DescriptorPublicKey],
-) -> Result<DescriptorPair, WalletCreationError> {
+) -> Result<DescriptorPair, PolicyError> {
     validate_multisig(threshold, keys.len())?;
     let refs: Vec<&DescriptorPublicKey> = keys.iter().collect();
     Ok(pair_from_keys(&refs, |joined| {
@@ -72,7 +72,7 @@ fn multisig_segwit(
 fn multisig_taproot(
     threshold: usize,
     keys: &[DescriptorPublicKey],
-) -> Result<DescriptorPair, WalletCreationError> {
+) -> Result<DescriptorPair, PolicyError> {
     validate_multisig(threshold, keys.len())?;
     let refs: Vec<&DescriptorPublicKey> = keys.iter().collect();
     Ok(pair_from_keys(&refs, |joined| {
@@ -83,7 +83,7 @@ fn multisig_taproot(
 fn timelocked_policy(
     primary: &PolicyPath,
     recoveries: &[RecoveryPath],
-) -> Result<DescriptorPair, WalletCreationError> {
+) -> Result<DescriptorPair, PolicyError> {
     let primary_path = path_info(primary);
     let recovery_paths: BTreeMap<u16, PathInfo> = recoveries
         .iter()
@@ -91,7 +91,7 @@ fn timelocked_policy(
         .collect();
 
     let policy = LianaPolicy::new(primary_path, recovery_paths)
-        .map_err(|e| WalletCreationError::LianaIntegration(e.to_string()))?;
+        .map_err(|e| PolicyError::LianaIntegration(e.to_string()))?;
     let descriptor = LianaDescriptor::new(policy);
 
     Ok(DescriptorPair {
@@ -108,9 +108,9 @@ fn path_info(path: &PolicyPath) -> PathInfo {
     }
 }
 
-fn validate_multisig(threshold: usize, key_count: usize) -> Result<(), WalletCreationError> {
+fn validate_multisig(threshold: usize, key_count: usize) -> Result<(), PolicyError> {
     if threshold == 0 || threshold > key_count {
-        return Err(WalletCreationError::DescriptorGeneration(format!(
+        return Err(PolicyError::DescriptorGeneration(format!(
             "Invalid threshold {} for {} keys",
             threshold, key_count
         )));
