@@ -135,9 +135,19 @@ fn requires_auth(path: &str, mode: &AuthMode) -> bool {
     !path.ends_with("/Ping")
 }
 
+/// HTTP-path variant of [`requires_auth`]. The HTTP gateway uses
+/// `snake_case` paths (e.g. `/wallet/ping`) instead of the gRPC
+/// `/<package>.<Service>/<Method>` form.
+pub fn http_requires_auth(path: &str, mode: &AuthMode) -> bool {
+    if matches!(mode, AuthMode::Disabled) {
+        return false;
+    }
+    path != "/wallet/ping"
+}
+
 /// Constant-time bearer-token comparison. Reads `Authorization: Bearer <t>`
 /// from the request headers and matches against the expected token.
-fn validate_bearer(headers: &HeaderMap, expected: &str) -> bool {
+pub fn validate_bearer(headers: &HeaderMap, expected: &str) -> bool {
     let presented = headers
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -218,6 +228,30 @@ mod tests {
             "/walletrpc.WalletService/CreateGenericWallet",
             &mode
         ));
+    }
+
+    #[test]
+    fn http_requires_auth_skips_ping_path() {
+        let mode = AuthMode::Required("t".into());
+        assert!(!http_requires_auth("/wallet/ping", &mode));
+        assert!(http_requires_auth("/wallet/create_generic_wallet", &mode));
+        assert!(http_requires_auth("/wallet/get_managed_key", &mode));
+    }
+
+    #[test]
+    fn http_requires_auth_does_not_match_grpc_ping_path() {
+        // The HTTP gateway exposes `/wallet/ping`; the gRPC `Ping` path
+        // must still be auth-checked through the HTTP filter (it would
+        // never legitimately reach the HTTP router, but defence-in-depth).
+        let mode = AuthMode::Required("t".into());
+        assert!(http_requires_auth("/walletrpc.WalletService/Ping", &mode));
+    }
+
+    #[test]
+    fn http_requires_auth_skips_everything_when_disabled() {
+        let mode = AuthMode::Disabled;
+        assert!(!http_requires_auth("/wallet/ping", &mode));
+        assert!(!http_requires_auth("/wallet/create_generic_wallet", &mode));
     }
 
     #[test]

@@ -1,9 +1,10 @@
 # Regtest stack: bitcoind + electrs + walletrs.
 #
 # Spin it up with `docker compose up --build` and you get a working walletrs
-# at localhost:50051 backed by a regtest bitcoind. The first walletrs log
-# line emits a `STORE THIS — generated auth token: <token>` entry; copy it
-# into your client's bearer-auth config.
+# at localhost:50051 (gRPC) and localhost:8080 (HTTP/JSON), both backed by a
+# regtest bitcoind. The first walletrs log line emits a
+# `STORE THIS — generated auth token: <token>` entry; copy it into your
+# client's bearer-auth config.
 #
 # Override the network by setting `BITCOIN_NETWORK` (e.g. signet, testnet)
 # in a `.env` file next to this compose. For mainnet, swap the bitcoind
@@ -78,6 +79,7 @@ services:
     environment:
       WALLETRS_HOST: 0.0.0.0
       WALLETRS_PORT: 50051
+      WALLETRS_HTTP_PORT: 8080
       BITCOIN_NETWORK: regtest
       ELECTRS_URL: tcp://electrs:60401
       WALLETRS_STORAGE_KIND: local
@@ -91,6 +93,7 @@ services:
       RUST_LOG: info,walletrs=debug
     ports:
       - "127.0.0.1:50051:50051"
+      - "127.0.0.1:8080:8080"
     volumes:
       - walletrs-data:/data
 

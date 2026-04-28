@@ -1,6 +1,6 @@
 # walletrs
 
-A standalone gRPC service for advanced Bitcoin wallets — multisig, miniscript policies, taproot leaf-hash spends, PSBT lifecycle.
+A standalone Bitcoin wallet service speaking gRPC and HTTP/JSON — multisig, miniscript policies, taproot leaf-hash spends, PSBT lifecycle.
 
 Built on top of [BDK](https://github.com/bitcoindevkit/bdk) and [rust-miniscript](https://github.com/rust-bitcoin/rust-miniscript).
 
@@ -10,7 +10,7 @@ Built on top of [BDK](https://github.com/bitcoindevkit/bdk) and [rust-miniscript
 
 - Creates Bitcoin wallets from declarative spending conditions (single sig, sortedmulti, taproot multisig with NUMS internal key, primary + time-locked recovery policies).
 - Manages keys: imports customer xpubs, generates system keys with envelope-encrypted private material, signs PSBTs from stored keys.
-- Funds, signs, finalizes, and broadcasts transactions over gRPC.
+- Funds, signs, finalizes, and broadcasts transactions over gRPC or HTTP/JSON. Both surfaces share the same handlers; HTTP routes are derived from `google.api.http` annotations on the proto and exposed at `/wallet/<snake_case_method>`.
 - Resolves taproot leaf hashes back to BDK policy paths so clients can pick which spending path to use.
 - Stores wallet state on local disk or S3-compatible object storage (Cloudflare R2, MinIO, AWS S3).
 
@@ -32,7 +32,15 @@ The included `docker-compose.yml` brings up bitcoind + electrs + walletrs in reg
 docker compose up --build
 ```
 
-walletrs listens on `127.0.0.1:50051`. The first boot logs a `STORE THIS — generated auth token: <token>` line; copy that into your client's bearer-auth config. Pin a fixed token by setting `WALLETRS_AUTH_TOKEN` in a `.env` next to the compose file.
+walletrs listens on `127.0.0.1:50051` (gRPC) and `127.0.0.1:8080` (HTTP/JSON). The first boot logs a `STORE THIS — generated auth token: <token>` line; copy that into your client's bearer-auth config. Pin a fixed token by setting `WALLETRS_AUTH_TOKEN` in a `.env` next to the compose file.
+
+Smoke-test the HTTP gateway:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/wallet/ping \
+  -H 'authorization: Bearer <token>' \
+  -H 'content-type: application/json' -d '{}'
+```
 
 For mainnet, signet, or testnet: edit the `bitcoind` service flags + `electrs --network` arg + `BITCOIN_NETWORK` env to match.
 
@@ -43,6 +51,7 @@ cargo build --release --bin walletrs
 
 WALLETRS_HOST=127.0.0.1 \
 WALLETRS_PORT=50051 \
+WALLETRS_HTTP_PORT=8080 \
 BITCOIN_NETWORK=regtest \
 ELECTRS_URL=tcp://127.0.0.1:60401 \
 WALLETRS_STORAGE_KIND=local \
@@ -57,15 +66,16 @@ The service generates a bearer auth token at first startup and prints it once wi
 
 | Variable | Default | Required | Notes |
 |---|---|---|---|
-| `WALLETRS_HOST` | `127.0.0.1` | yes | gRPC bind host |
-| `WALLETRS_PORT` | `50051` | yes | |
+| `WALLETRS_HOST` | `127.0.0.1` | yes | bind host shared by gRPC + HTTP |
+| `WALLETRS_PORT` | `50051` | yes | gRPC port |
+| `WALLETRS_HTTP_PORT` | `8080` | yes | HTTP/JSON port |
 | `BITCOIN_NETWORK` | `regtest` | yes | `mainnet` / `testnet` / `signet` / `regtest` |
 | `ELECTRS_URL` | `tcp://127.0.0.1:60401` | yes | Electrum / Electrs server URL |
 | `WALLETRS_STORAGE_KIND` | `local` | yes | `local` or `s3` |
 | `WALLETRS_STORAGE_PATH` | `./data` | local-only | filesystem root for wallet data |
 | `WALLETRS_S3_*` | — | s3-only | endpoint, bucket, region, creds, prefix, force_path_style |
 | `WALLETRS_KEK` | — | system-keys | base64 32-byte envelope KEK |
-| `WALLETRS_AUTH_TOKEN` | — | optional | bearer token for gRPC; auto-generated when unset |
+| `WALLETRS_AUTH_TOKEN` | — | optional | bearer token for both gRPC + HTTP; auto-generated when unset |
 | `WALLETRS_AUTH_DISABLED` | `0` | optional | disables auth entirely |
 | `RUST_LOG` | `info,walletrs=debug` | optional | |
 
@@ -74,7 +84,7 @@ The service generates a bearer auth token at first startup and prints it once wi
 ```
 walletrs/
 ├── crates/
-│   └── server/        # main gRPC binary + library
+│   └── server/        # main binary (gRPC + HTTP gateway) + library
 ├── contrib/
 │   └── liana/
 ├── proto/

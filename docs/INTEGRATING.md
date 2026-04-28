@@ -4,9 +4,19 @@ This guide is for client engineers connecting their service to a walletrs instan
 
 ## Connection model
 
-walletrs serves plaintext gRPC on the configured `WALLETRS_HOST:WALLETRS_PORT` (default `127.0.0.1:50051`). For non-localhost deployments, terminate TLS at a reverse proxy and have your client trust that proxy's certificate.
+walletrs exposes two surfaces against the same handlers:
 
-Bearer-token auth is required by default — every RPC except `Ping` checks `Authorization: Bearer <token>` in the gRPC request metadata.
+- **gRPC** on `WALLETRS_HOST:WALLETRS_PORT` (default `127.0.0.1:50051`).
+- **HTTP/JSON** on `WALLETRS_HOST:WALLETRS_HTTP_PORT` (default `127.0.0.1:8080`). Routes are derived from `(google.api.http)` annotations on the proto and exposed at `POST /wallet/<snake_case_method>` with an `application/json` body.
+
+Both serve plaintext. For non-localhost deployments, terminate TLS at a reverse proxy and have your client trust that proxy's certificate.
+
+Bearer-token auth is required by default on both surfaces — every RPC except `Ping` checks `Authorization: Bearer <token>` (gRPC metadata or HTTP header).
+
+### When to pick which
+
+- **gRPC**: server-to-server, when you already have tonic / grpc-go / grpcio in the stack and want native streaming, codegen'd types, low overhead.
+- **HTTP/JSON**: browser, curl, scripts, polyglot clients without protoc tooling, gateways that prefer HTTP. Same handlers, same auth, same errors — just a different wire format.
 
 ## Vendoring the proto contract
 
@@ -142,6 +152,47 @@ client.Ping({}, meta, (err: any, resp: any) => {
 ```
 
 For TLS, swap `createInsecure()` for `createSsl(...)` and point at your reverse-proxy hostname.
+
+### HTTP/JSON (curl / any HTTP client)
+
+Every RPC is also reachable as `POST /wallet/<snake_case_method>` on the HTTP port. Request and response bodies are the JSON encoding of the same proto messages (numeric fields stay numeric, `bytes` fields are base64, enums use the canonical name). Errors map gRPC status codes to HTTP status codes and return a `{ "code": <int>, "message": <string> }` body.
+
+```bash
+TOKEN=...
+
+# Liveness — no auth required
+curl -sS -X POST http://127.0.0.1:8080/wallet/ping \
+  -H 'content-type: application/json' -d '{}'
+
+# Authenticated call
+curl -sS -X POST http://127.0.0.1:8080/wallet/create_system_managed_key \
+  -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"user_id":"alice","device_id":"alice-device-1","key_name":"primary"}'
+```
+
+| HTTP path | gRPC method |
+|---|---|
+| `POST /wallet/ping` | `Ping` |
+| `POST /wallet/create_generic_wallet` | `CreateGenericWallet` |
+| `POST /wallet/create_system_managed_key` | `CreateSystemManagedKey` |
+| `POST /wallet/create_customer_managed_key` | `CreateCustomerManagedKey` |
+| `POST /wallet/get_managed_key` | `GetManagedKey` |
+| `POST /wallet/list_managed_keys` | `ListManagedKeys` |
+| `POST /wallet/get` | `GetWallet` |
+| `POST /wallet/update` | `UpdateWallet` |
+| `POST /wallet/reveal_next_address` | `RevealNextAddress` |
+| `POST /wallet/list_addresses` | `ListAddresses` |
+| `POST /wallet/get_transactions` | `GetWalletTransactions` |
+| `POST /wallet/get_utxos` | `GetWalletUtxos` |
+| `POST /wallet/fund_transaction` | `FundWalletTransaction` |
+| `POST /wallet/sign_transaction` | `SignWalletTransaction` |
+| `POST /wallet/add_verify_transaction_signature` | `AddVerifyTransactionSignature` |
+| `POST /wallet/finalize_transaction` | `FinalizeWalletTransaction` |
+| `POST /wallet/broadcast_transaction` | `BroadcastWalletTransaction` |
+| `POST /wallet/get_spending_paths` | `GetWalletSpendingPaths` |
+
+The mapping is generated from `(google.api.http)` annotations in `proto/walletrpc.proto` — the proto stays the single source of truth.
 
 ## Worked end-to-end example
 
@@ -288,7 +339,7 @@ The signer maps that leaf hash back to a BDK policy-path index (`vec![0]` for pr
 
 | Error | Cause |
 |---|---|
-| `UNAUTHENTICATED: missing or invalid bearer token` | Forgot the `Authorization: Bearer …` metadata. `Ping` is the only RPC that bypasses. |
+| `UNAUTHENTICATED: missing or invalid bearer token` | Forgot the `Authorization: Bearer …` header (HTTP) or metadata (gRPC). `Ping` is the only RPC that bypasses. HTTP returns `401` with `{"code": 16, "message": ...}`. |
 | `INVALID_ARGUMENT: Leaf hash 'X' does not match any spending path in the descriptor` | The leaf hash you sent isn't part of this wallet's taproot tree. Check the `TaprootLeafInfo[]` from `CreateGenericWallet`. |
 | `NOT_FOUND: Wallet not found` | Either the wallet was never created or the storage tier doesn't have it (S3 misconfig, wrong `WALLETRS_S3_PREFIX`, missing local data dir). |
 | `INTERNAL: Failed to extract taproot leaf hash for recovery condition X` | The descriptor's signer fingerprints didn't surface in `tap_key_origins` — usually a malformed input key. Re-check `xpub` + `fingerprint` + `derivation_path` on the `CreateCustomerManagedKey` call. |

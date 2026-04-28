@@ -1,6 +1,6 @@
 # Architecture
 
-`walletrs` is a single-tenant Rust gRPC service that creates and operates Bitcoin wallets backed by [BDK](https://github.com/bitcoindevkit/bdk), [rust-miniscript](https://github.com/rust-bitcoin/rust-miniscript), and a vendored fork of [Liana](https://github.com/wizardsardine/liana) for primary/recovery descriptor compilation. This doc describes how the pieces fit together; for ops/integrator concerns see [`OPERATING.md`](OPERATING.md) and [`INTEGRATING.md`](INTEGRATING.md).
+`walletrs` is a single-tenant Rust service that creates and operates Bitcoin wallets backed by [BDK](https://github.com/bitcoindevkit/bdk), [rust-miniscript](https://github.com/rust-bitcoin/rust-miniscript), and a vendored fork of [Liana](https://github.com/wizardsardine/liana) for primary/recovery descriptor compilation. It exposes the same handler set over gRPC (tonic) and HTTP/JSON (axum), generated from a single proto. This doc describes how the pieces fit together; for ops/integrator concerns see [`OPERATING.md`](OPERATING.md) and [`INTEGRATING.md`](INTEGRATING.md).
 
 ## Component map
 
@@ -19,18 +19,18 @@
         │ (tonic 0.9)  │      │
         └──────┬───────┘      │     ┌───────────────────────┐
                │              ├────►│   storage backend     │  local FS or S3/R2 with envelope crypto
-               │              │     └───────────────────────┘
-               │              │
-               │              │     ┌───────────────────────┐
-               │              └────►│      electrs URL      │  Electrum-Rust server for chain sync
+        ┌──────┴───────┐      │     └───────────────────────┘
+        │  HTTP/JSON   │──────┤
+        │  (axum 0.6)  │      │     ┌───────────────────────┐
+        └──────┬───────┘      └────►│      electrs URL      │  Electrum-Rust server for chain sync
                │                    └───────────────────────┘
                │
         ┌──────▼───────┐
-        │  AuthLayer   │  bearer-token interceptor, Ping bypasses
+        │   Auth       │  bearer-token gate on both surfaces, Ping bypasses
         └──────────────┘
 ```
 
-External callers talk to the service over plaintext gRPC. The bearer-token interceptor sits in front of every RPC except `Ping`. Each handler then dispatches into the wallet pipeline, which is divided into focused modules under `crates/server/src/wallet/`.
+External callers reach the service over either gRPC (default `:50051`) or HTTP/JSON (default `:8080`). Both surfaces share one `WalletService` impl: gRPC frames are decoded by tonic; HTTP requests are decoded by an axum router whose routes are codegen'd at build time from `(google.api.http)` annotations on the proto. The bearer-token gate sits in front of every RPC except `Ping`.
 
 ## Module layout
 
@@ -40,9 +40,10 @@ crates/server/src/
 ├── config.rs                    env-driven Config + global Lazy<Config>
 ├── db.rs                        thin `(StorageManager, models)` re-export layer
 ├── lib.rs                       crate root + public re-exports
-├── main.rs                      tonic server bootstrap
+├── main.rs                      tonic + axum bootstrap (gRPC + HTTP gateway)
+├── http.rs                      HTTP/JSON gateway: status mapping, auth middleware, includes build-time-generated routes
 ├── proto/
-│   └── mod.rs                   `tonic::include_proto!("walletrpc")`
+│   └── mod.rs                   `tonic::include_proto!("walletrpc")` + pbjson serde
 ├── storage/                     pluggable storage abstraction
 │   ├── traits.rs                Storage / StorageBackend / IndexableStorage
 │   ├── filesystem.rs            local FS backend
@@ -186,7 +187,20 @@ Three persistence concerns:
    - `StoredSignedPSBT` (collected signatures + finalized output)
 
    The `EncryptingBackend` wrapper transparently envelope-encrypts payloads with `WALLETRS_KEK` before writes and decrypts on reads, so even an attacker who exfiltrates the storage tier can't read system-managed private keys without the KEK.
-3. **Per-wallet locks.** `WALLET_LOCKS` is a `HashMap<wallet_id, Arc<Mutex<()>>>`; every load / create acquires the lock for the duration of the gRPC call. Prevents concurrent BDK reads/writes against the same store from racing.
+3. **Per-wallet locks.** `WALLET_LOCKS` is a `HashMap<wallet_id, Arc<Mutex<()>>>`; every load / create acquires the lock for the duration of the call. Prevents concurrent BDK reads/writes against the same store from racing. Locks are surface-agnostic — gRPC and HTTP requests contend on the same map.
+
+## HTTP/JSON gateway
+
+The HTTP surface reuses the gRPC `WalletService` impl with no per-RPC glue:
+
+1. `proto/walletrpc.proto` annotates each RPC with `option (google.api.http) = { post: "/wallet/<snake>" body: "*" };` (single source of truth for the path mapping).
+2. `crates/server/build.rs` compiles the proto with `tonic-build`, emits a `FileDescriptorSet`, then runs two extra steps:
+   - `pbjson-build` adds `serde::Serialize`/`Deserialize` impls to the prost types so JSON encoding follows proto3 JSON semantics (numeric stays numeric, `bytes` is base64, enums use the canonical name).
+   - A custom step reads the descriptor with `prost-reflect`, walks every RPC's `(google.api.http)` extension, and writes `http_routes.rs` — an axum `Router` that decodes the request body into the prost message, wraps it in a `tonic::Request`, dispatches through `WalletService::<rpc>`, and serializes the response.
+3. `crates/server/src/http.rs` `include!`s the generated routes, maps `tonic::Status` codes to HTTP status codes, and provides a thin axum middleware mirroring `AuthLayer` semantics for the bearer token.
+4. `main.rs` runs the axum server alongside the tonic server under one `tokio::select!` — both bind on `WALLETRS_HOST`, separated only by `WALLETRS_PORT` (gRPC) and `WALLETRS_HTTP_PORT` (HTTP).
+
+Adding a new RPC is a one-line proto change (annotation) followed by the usual handler addition. The HTTP route generates itself.
 
 ## Why these specific dependencies
 
@@ -197,7 +211,7 @@ Three persistence concerns:
 
 ## What's intentionally not here
 
-- **Multi-tenancy.** The gRPC contract carries `user_id` on every request because the same proto serves single-tenant OSS deployments and multi-tenant operators that run a walletrs instance per logical tenant. The OSS distribution does not enforce tenant isolation — operators that need it run multiple instances or wrap walletrs behind a tenant-aware proxy.
+- **Multi-tenancy.** The wire contract carries `user_id` on every request because the same proto serves single-tenant OSS deployments and multi-tenant operators that run a walletrs instance per logical tenant. The OSS distribution does not enforce tenant isolation — operators that need it run multiple instances or wrap walletrs behind a tenant-aware proxy.
 - **Hardware wallet integration.** Signing with HWWs is the client's job. Walletrs accepts pre-signed PSBTs via `AddVerifyTransactionSignature` and combines them in-place; it does not talk USB / HID.
-- **Built-in TLS.** Run a reverse proxy (Caddy / Traefik / nginx) for TLS termination. Native TLS on the gRPC layer is a future opt-in, not a v0.1.0 feature.
+- **Built-in TLS.** Run a reverse proxy (Caddy / Traefik / nginx) for TLS termination on either surface. Native TLS is a future opt-in, not a v0.1.0 feature.
 - **Audit log.** No append-only history of mutations today. On the roadmap.

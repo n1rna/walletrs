@@ -2,38 +2,76 @@ syntax = "proto3";
 
 package walletrpc;
 
+import "google/api/annotations.proto";
+
 service WalletService {
 	// Queries
-	rpc Ping (PingRequest) returns (PingResponse);
+	rpc Ping (PingRequest) returns (PingResponse) {
+		option (google.api.http) = { post: "/wallet/ping" body: "*" };
+	}
 
 	// Notifications
 	// rpc TransactionNotifications (TransactionNotificationsRequest) returns (stream TransactionNotificationsResponse);
 	// rpc SpentnessNotifications (SpentnessNotificationsRequest) returns (stream SpentnessNotificationsResponse);
 	// rpc AccountNotifications (AccountNotificationsRequest) returns (stream AccountNotificationsResponse);
 
-	rpc CreateGenericWallet (CreateGenericWalletRequest) returns (CreateGenericWalletResponse);
+	rpc CreateGenericWallet (CreateGenericWalletRequest) returns (CreateGenericWalletResponse) {
+		option (google.api.http) = { post: "/wallet/create_generic_wallet" body: "*" };
+	}
 
 	// Unified Key Management
-	rpc CreateSystemManagedKey (CreateSystemManagedKeysRequest) returns (CreateSystemManagedKeysResponse);
-	rpc CreateCustomerManagedKey (CreateCustomerManagedKeyRequest) returns (CreateCustomerManagedKeyResponse);
-	rpc GetManagedKey (GetManagedKeyRequest) returns (GetManagedKeyResponse);
-	rpc ListManagedKeys (ListManagedKeysRequest) returns (ListManagedKeysResponse);
+	rpc CreateSystemManagedKey (CreateSystemManagedKeysRequest) returns (CreateSystemManagedKeysResponse) {
+		option (google.api.http) = { post: "/wallet/create_system_managed_key" body: "*" };
+	}
+	rpc CreateCustomerManagedKey (CreateCustomerManagedKeyRequest) returns (CreateCustomerManagedKeyResponse) {
+		option (google.api.http) = { post: "/wallet/create_customer_managed_key" body: "*" };
+	}
+	rpc GetManagedKey (GetManagedKeyRequest) returns (GetManagedKeyResponse) {
+		option (google.api.http) = { post: "/wallet/get_managed_key" body: "*" };
+	}
+	rpc ListManagedKeys (ListManagedKeysRequest) returns (ListManagedKeysResponse) {
+		option (google.api.http) = { post: "/wallet/list_managed_keys" body: "*" };
+	}
 
-	rpc GetWallet (GetWalletRequest) returns (GetWalletResponse);
-	rpc UpdateWallet (UpdateWalletRequest) returns (UpdateWalletResponse);
-	rpc RevealNextAddress (RevealNextAddressRequest) returns (RevealNextAddressResponse);
-	rpc ListAddresses (ListAddressesRequest) returns (ListAddressesResponse);
-	rpc GetWalletTransactions (GetWalletTransactionsRequest) returns (GetWalletTransactionsResponse);
-	rpc GetWalletUtxos (GetWalletUtxosRequest) returns (GetWalletUtxosResponse);
+	rpc GetWallet (GetWalletRequest) returns (GetWalletResponse) {
+		option (google.api.http) = { post: "/wallet/get" body: "*" };
+	}
+	rpc UpdateWallet (UpdateWalletRequest) returns (UpdateWalletResponse) {
+		option (google.api.http) = { post: "/wallet/update" body: "*" };
+	}
+	rpc RevealNextAddress (RevealNextAddressRequest) returns (RevealNextAddressResponse) {
+		option (google.api.http) = { post: "/wallet/reveal_next_address" body: "*" };
+	}
+	rpc ListAddresses (ListAddressesRequest) returns (ListAddressesResponse) {
+		option (google.api.http) = { post: "/wallet/list_addresses" body: "*" };
+	}
+	rpc GetWalletTransactions (GetWalletTransactionsRequest) returns (GetWalletTransactionsResponse) {
+		option (google.api.http) = { post: "/wallet/get_transactions" body: "*" };
+	}
+	rpc GetWalletUtxos (GetWalletUtxosRequest) returns (GetWalletUtxosResponse) {
+		option (google.api.http) = { post: "/wallet/get_utxos" body: "*" };
+	}
 
-	rpc FundWalletTransaction (FundWalletTransactionRequest) returns (FundWalletTransactionResponse);
-	rpc SignWalletTransaction (SignWalletTransactionRequest) returns (SignWalletTransactionResponse);
-	rpc AddVerifyTransactionSignature (AddVerifyTransactionSignatureRequest) returns (AddVerifyTransactionSignatureResponse);
-	rpc FinalizeWalletTransaction (FinalizeWalletTransactionRequest) returns (FinalizeWalletTransactionResponse);
-	rpc BroadcastWalletTransaction (BroadcastWalletTransactionRequest) returns (BroadcastWalletTransactionResponse);
+	rpc FundWalletTransaction (FundWalletTransactionRequest) returns (FundWalletTransactionResponse) {
+		option (google.api.http) = { post: "/wallet/fund_transaction" body: "*" };
+	}
+	rpc SignWalletTransaction (SignWalletTransactionRequest) returns (SignWalletTransactionResponse) {
+		option (google.api.http) = { post: "/wallet/sign_transaction" body: "*" };
+	}
+	rpc AddVerifyTransactionSignature (AddVerifyTransactionSignatureRequest) returns (AddVerifyTransactionSignatureResponse) {
+		option (google.api.http) = { post: "/wallet/add_verify_transaction_signature" body: "*" };
+	}
+	rpc FinalizeWalletTransaction (FinalizeWalletTransactionRequest) returns (FinalizeWalletTransactionResponse) {
+		option (google.api.http) = { post: "/wallet/finalize_transaction" body: "*" };
+	}
+	rpc BroadcastWalletTransaction (BroadcastWalletTransactionRequest) returns (BroadcastWalletTransactionResponse) {
+		option (google.api.http) = { post: "/wallet/broadcast_transaction" body: "*" };
+	}
 
 	// Taproot spending path management
-	rpc GetWalletSpendingPaths (GetWalletSpendingPathsRequest) returns (GetWalletSpendingPathsResponse);
+	rpc GetWalletSpendingPaths (GetWalletSpendingPathsRequest) returns (GetWalletSpendingPathsResponse) {
+		option (google.api.http) = { post: "/wallet/get_spending_paths" body: "*" };
+	}
 
 	// rpc ImportPrivateKey (ImportPrivateKeyRequest) returns (ImportPrivateKeyResponse);
 	// rpc FundTransaction (FundTransactionRequest) returns (FundTransactionResponse);
