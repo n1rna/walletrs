@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use clap::Parser;
 use log::{error, info, trace};
 use tonic::transport::Server;
@@ -5,6 +7,7 @@ use tower::ServiceBuilder;
 use walletrs_lib::agent::{self, AgentAction, AgentConfig, AgentKeypair, AgentState};
 use walletrs_lib::config::CONFIG;
 use walletrs_lib::db;
+use walletrs_lib::http::{http_auth_middleware, http_router};
 use walletrs_lib::proto::pb::wallet_service_server::WalletServiceServer;
 use walletrs_lib::wallet::service::auth::{AuthLayer, AuthMode};
 use walletrs_lib::wallet::service::middleware::LoggingLayer;
@@ -105,22 +108,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         CONFIG.auth_token().map(|s| s.to_string()),
     );
 
-    let addr = format!("{}:{}", CONFIG.host(), CONFIG.port()).parse()?;
+    let grpc_addr = format!("{}:{}", CONFIG.host(), CONFIG.port()).parse()?;
+    let http_addr: std::net::SocketAddr =
+        format!("{}:{}", CONFIG.host(), CONFIG.http_port()).parse()?;
     let walletrpc = WalletRPC::default();
+    let http_svc = Arc::new(WalletRPC::default());
     trace!("WalletRPC service initialized");
-    info!("Listening on {}", addr);
+    info!("gRPC listening on {}", grpc_addr);
+    info!("HTTP/JSON listening on {}", http_addr);
 
-    let server = Server::builder()
+    let grpc_server = Server::builder()
         .layer(
             ServiceBuilder::new()
-                .layer(AuthLayer::new(auth_mode))
+                .layer(AuthLayer::new(auth_mode.clone()))
                 .layer(LoggingLayer),
         )
         .add_service(WalletServiceServer::new(walletrpc))
-        .serve(addr);
+        .serve(grpc_addr);
+
+    let http_app = http_router(http_svc).layer(axum::middleware::from_fn_with_state(
+        auth_mode,
+        http_auth_middleware,
+    ));
+    let http_server = axum::Server::bind(&http_addr).serve(http_app.into_make_service());
 
     tokio::select! {
-        result = server => result?,
+        result = grpc_server => result?,
+        result = http_server => result?,
         _ = wait_for_agent(agent_handle) => {
             // Agent task should run forever; if it returns, log and exit.
             error!("agent task ended unexpectedly");

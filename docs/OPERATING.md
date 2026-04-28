@@ -1,6 +1,6 @@
 # Operating walletrs
 
-This guide is for operators running a walletrs instance. For the gRPC integration story see [`INTEGRATING.md`](INTEGRATING.md); for the threat model see [`/SECURITY.md`](../SECURITY.md).
+This guide is for operators running a walletrs instance. For client integration (gRPC and HTTP/JSON) see [`INTEGRATING.md`](INTEGRATING.md); for the threat model see [`/SECURITY.md`](../SECURITY.md).
 
 ## Deploy paths
 
@@ -12,7 +12,7 @@ The shipped `docker-compose.yml` brings up a regtest stack — bitcoind + electr
 docker compose up --build
 ```
 
-walletrs listens on `127.0.0.1:50051`. The first start logs a `STORE THIS — generated auth token: <token>` line; copy it into your client.
+walletrs exposes two surfaces: gRPC on `127.0.0.1:50051` and HTTP/JSON on `127.0.0.1:8080`. Both share the same handlers and the same bearer token. The first start logs a `STORE THIS — generated auth token: <token>` line; copy it into your client.
 
 To pin a known token across restarts, drop a `.env` next to the compose file:
 
@@ -26,7 +26,7 @@ Switch networks by editing the bitcoind / electrs flags and the `BITCOIN_NETWORK
 ### Standalone Docker
 
 ```bash
-docker run --rm -p 50051:50051 \
+docker run --rm -p 50051:50051 -p 8080:8080 \
   -v walletrs-data:/data \
   -e BITCOIN_NETWORK=signet \
   -e ELECTRS_URL=tcp://your-electrs:50001 \
@@ -48,15 +48,19 @@ Binaries are also attached to GitHub releases for `x86_64-unknown-linux-gnu`, `x
 
 ### Behind a reverse proxy (recommended for non-localhost)
 
-walletrs serves plaintext gRPC. Terminate TLS at a reverse proxy:
+walletrs serves plaintext gRPC and plaintext HTTP/JSON. Terminate TLS at a reverse proxy:
 
 ```caddyfile
-walletrs.example.com {
+walletrs-grpc.example.com {
     reverse_proxy h2c://127.0.0.1:50051
+}
+
+walletrs-api.example.com {
+    reverse_proxy 127.0.0.1:8080
 }
 ```
 
-(Caddy serves HTTP/2 cleartext upstreams via `h2c://`. Traefik / nginx need analogous gRPC configuration.) Native TLS on the gRPC layer is not in v0.1.0.
+(Caddy serves HTTP/2 cleartext upstreams via `h2c://` for the gRPC port; the HTTP/JSON port is plain HTTP/1.1. Traefik / nginx need analogous configuration.) Native TLS on either layer is not in v0.1.0.
 
 ## Configuration
 
@@ -64,8 +68,9 @@ Every knob is an environment variable; there is no config file.
 
 | Variable | Default | Required when | Notes |
 |---|---|---|---|
-| `WALLETRS_HOST` | `127.0.0.1` | always | gRPC bind host. Use `0.0.0.0` inside containers. |
-| `WALLETRS_PORT` | `50051` | always | |
+| `WALLETRS_HOST` | `127.0.0.1` | always | bind host shared by gRPC + HTTP. Use `0.0.0.0` inside containers. |
+| `WALLETRS_PORT` | `50051` | always | gRPC port |
+| `WALLETRS_HTTP_PORT` | `8080` | always | HTTP/JSON port |
 | `BITCOIN_NETWORK` | `regtest` | always | `mainnet` / `testnet` / `signet` / `regtest` |
 | `ELECTRS_URL` | `tcp://127.0.0.1:60401` | always | Electrum-Rust server URL |
 | `WALLETRS_STORAGE_KIND` | `local` | always | `local` or `s3` |
@@ -78,8 +83,8 @@ Every knob is an environment variable; there is no config file.
 | `WALLETRS_S3_PREFIX` | — | s3 | object-key namespace inside the bucket |
 | `WALLETRS_S3_FORCE_PATH_STYLE` | `true` | s3 | required for MinIO; safe for R2 |
 | `WALLETRS_KEK` | — | system-keys | base64 32-byte envelope KEK |
-| `WALLETRS_AUTH_TOKEN` | — | optional | bearer token for gRPC; auto-generated when unset |
-| `WALLETRS_AUTH_DISABLED` | `0` | optional | disables auth entirely |
+| `WALLETRS_AUTH_TOKEN` | — | optional | bearer token for gRPC + HTTP; auto-generated when unset |
+| `WALLETRS_AUTH_DISABLED` | `0` | optional | disables auth on both surfaces |
 | `RUST_LOG` | `info,walletrs=debug` | optional | |
 
 ## Storage backends
@@ -112,13 +117,13 @@ The pinned `BehaviorVersion` in `crates/server/src/storage/s3.rs` works around a
 
 ## Authentication
 
-Three modes for the gRPC bearer token:
+The same bearer token gates both the gRPC and HTTP surfaces. Three modes:
 
 1. **Operator-supplied** — set `WALLETRS_AUTH_TOKEN`. Recommended for production so you can rotate independently from the binary lifecycle.
 2. **Auto-generated** — leave `WALLETRS_AUTH_TOKEN` unset. walletrs generates a hex-encoded 32-byte token at startup, prints it once with the prefix `STORE THIS — generated auth token: <token>`, and enforces it from there.
 3. **Disabled** — `WALLETRS_AUTH_DISABLED=1`. Bypasses the interceptor entirely. Acceptable for trusted local environments (loopback only) but never for anything internet-reachable.
 
-`Ping` always bypasses auth so liveness probes don't need the token.
+The `Ping` RPC (gRPC `/walletrpc.WalletService/Ping` and HTTP `POST /wallet/ping`) always bypasses auth so liveness probes don't need the token.
 
 To rotate a token:
 

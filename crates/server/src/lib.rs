@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod config;
 pub mod db;
+pub mod http;
 pub mod proto;
 pub mod storage;
 pub mod wallet;

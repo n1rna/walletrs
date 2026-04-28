@@ -13,7 +13,7 @@ RUN cargo install cargo-chef --locked --version ^0.1
 WORKDIR /usr/src/app
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends protobuf-compiler \
+ && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev \
  && rm -rf /var/lib/apt/lists/*
 
 # ── Planner: compute the dep graph into recipe.json ──────────────────────
@@ -62,9 +62,10 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=builder /usr/local/bin/walletrs ./walletrs
 
-EXPOSE 50051
+EXPOSE 50051 8080
 ENV WALLETRS_HOST=0.0.0.0 \
     WALLETRS_PORT=50051 \
+    WALLETRS_HTTP_PORT=8080 \
     WALLETRS_STORAGE_PATH=/data \
     RUST_LOG=info,walletrs=debug
 

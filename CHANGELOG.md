@@ -4,6 +4,10 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [Unreleased]
 
+### Added
+
+- **HTTP/JSON gateway alongside gRPC.** A new axum server runs on `WALLETRS_HTTP_PORT` (default `8080`) and exposes every RPC at `POST /wallet/<snake_case_method>`. Routes are generated at build time from `(google.api.http)` annotations on `proto/walletrpc.proto` — adding a new RPC requires only the annotation, no Rust glue. JSON encoding uses proto3 semantics via `pbjson` (numeric fields stay numeric, `bytes` is base64). Bearer-token auth is shared with gRPC; the `Ping` RPC bypasses on both surfaces. `tonic::Status` is mapped to standard HTTP status codes with a `{ "code", "message" }` body. Vendored minimal `google/api/{annotations,http}.proto` under `proto/google/api/` to keep the proto compile self-contained.
+
 ## [0.3.0] - 2026-04-27
 
 ### Changed

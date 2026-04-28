@@ -298,3 +298,72 @@ where
         Ok(results)
     }
 }
+
+#[cfg(test)]
+mod backend_tests {
+    use super::*;
+
+    fn backend(dir: &tempfile::TempDir) -> LocalFileSystemBackend {
+        LocalFileSystemBackend::new(dir.path().to_str().unwrap())
+    }
+
+    #[test]
+    fn write_creates_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = backend(&dir);
+        b.write_bytes("nested/deeper/file.bin", b"hi").unwrap();
+        let raw = std::fs::read(dir.path().join("nested/deeper/file.bin")).unwrap();
+        assert_eq!(raw, b"hi");
+    }
+
+    #[test]
+    fn round_trip_read_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = backend(&dir);
+        b.write_bytes("x.bin", b"payload").unwrap();
+        assert_eq!(b.read_bytes("x.bin").unwrap(), b"payload");
+    }
+
+    #[test]
+    fn read_missing_file_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = backend(&dir);
+        assert!(b.read_bytes("nope.bin").is_err());
+    }
+
+    #[test]
+    fn delete_returns_true_when_present_false_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = backend(&dir);
+        b.write_bytes("x.bin", b"x").unwrap();
+        assert!(b.delete_file("x.bin").unwrap());
+        assert!(!b.delete_file("x.bin").unwrap());
+        assert!(!b.delete_file("never-existed.bin").unwrap());
+    }
+
+    #[test]
+    fn file_exists_reflects_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = backend(&dir);
+        assert!(!b.file_exists("a.bin").unwrap());
+        b.write_bytes("a.bin", b"a").unwrap();
+        assert!(b.file_exists("a.bin").unwrap());
+    }
+
+    #[test]
+    fn list_files_on_missing_prefix_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = backend(&dir);
+        let listed = b.list_files("never/created/").unwrap();
+        assert!(listed.is_empty());
+    }
+
+    #[test]
+    fn create_directory_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = backend(&dir);
+        b.create_directory("a/b/c").unwrap();
+        b.create_directory("a/b/c").unwrap();
+        assert!(dir.path().join("a/b/c").is_dir());
+    }
+}

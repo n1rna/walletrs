@@ -22,6 +22,7 @@ pub struct S3Config {
 pub struct Config {
     pub host: String,
     pub port: u16,
+    pub http_port: u16,
     pub electrs_url: String,
     pub bitcoin_network: String,
     pub storage_base_path: String,
@@ -72,11 +73,16 @@ impl Config {
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(50051);
+        let http_port = env::var("WALLETRS_HTTP_PORT")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(8080);
         let host = env::var("WALLETRS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
         Self {
             host,
             port,
+            http_port,
             electrs_url: env::var("ELECTRS_URL").unwrap_or_else(|_| "127.0.0.1:60401".to_string()),
             bitcoin_network: env::var("BITCOIN_NETWORK").unwrap_or_else(|_| "regtest".to_string()),
             storage_base_path: env::var("WALLETRS_STORAGE_PATH")
@@ -125,6 +131,10 @@ impl Config {
         self.port
     }
 
+    pub fn http_port(&self) -> u16 {
+        self.http_port
+    }
+
     pub fn auth_disabled(&self) -> bool {
         self.auth_disabled
     }
@@ -147,3 +157,24 @@ pub fn parse_network_str(network_str: &str) -> Option<Network> {
 
 /// Global config instance
 pub static CONFIG: Lazy<Config> = Lazy::new(Config::new);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_network_recognises_canonical_strings() {
+        assert_eq!(parse_network_str("mainnet"), Some(Network::Bitcoin));
+        assert_eq!(parse_network_str("bitcoin"), Some(Network::Bitcoin));
+        assert_eq!(parse_network_str("testnet"), Some(Network::Testnet));
+        assert_eq!(parse_network_str("signet"), Some(Network::Signet));
+        assert_eq!(parse_network_str("regtest"), Some(Network::Regtest));
+    }
+
+    #[test]
+    fn parse_network_rejects_unknown_strings() {
+        assert_eq!(parse_network_str(""), None);
+        assert_eq!(parse_network_str("MAINNET"), None);
+        assert_eq!(parse_network_str("liquid"), None);
+    }
+}
