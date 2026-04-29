@@ -4205,6 +4205,7 @@ dependencies = [
  "tower 0.4.13",
  "url",
  "uuid",
+ "wallet-runtime",
 ]
 
 [[package]]

@@ -14,8 +14,6 @@ use crate::wallet::signer::{
     add_signers_for_psbt, resolve_policy_path_from_leaf, sign_psbt_with_taproot_support,
 };
 use crate::LianaDescriptor;
-use bdk_electrum::electrum_client;
-use bdk_electrum::BdkElectrumClient;
 use bdk_wallet::bitcoin::{Address as BitcoinAddress, Psbt};
 use bdk_wallet::chain::ChainPosition;
 use bdk_wallet::KeychainKind;
@@ -25,6 +23,7 @@ use miniscript::psbt::PsbtExt;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use tonic::{Request, Response, Status};
+use wallet_runtime::ElectrumClient;
 
 /// Load the persisted Liana descriptor for a wallet. Returns `None` for
 /// non-Liana wallets (single-sig, plain multisig, taproot multisig with NUMS
@@ -648,8 +647,9 @@ pub async fn broadcast_wallet_transaction(
     match bdk_manager.load_wallet(&req.wallet_id) {
         Ok(wallet_result) => {
             let mut _db = wallet_result.store;
-            let client =
-                BdkElectrumClient::new(electrum_client::Client::new(CONFIG.electrs_url()).unwrap());
+            let client = ElectrumClient::connect(CONFIG.electrs_url()).map_err(|e| {
+                Status::internal(format!("Failed to connect to electrs: {}", e))
+            })?;
 
             // Get the finalized PSBT (must have been finalized via finalize_wallet_transaction)
             let psbt_str = db::get_finalized_psbt(&req.wallet_id, &req.txid).map_err(|e| {
@@ -678,7 +678,7 @@ pub async fn broadcast_wallet_transaction(
             })?;
 
             client
-                .transaction_broadcast(&tx)
+                .broadcast(&tx)
                 .map_err(|e| Status::internal(format!("Failed to broadcast transaction: {}", e)))?;
 
             Ok(Response::new(BroadcastWalletTransactionResponse {
