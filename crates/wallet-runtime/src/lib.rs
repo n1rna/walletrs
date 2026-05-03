@@ -32,5 +32,7 @@ pub use error::WalletRuntimeError;
 pub use persister::InMemoryPersister;
 pub use policy_path::resolve_policy_path_from_leaf;
 pub use psbt::{analyze_for_signing, PsbtSignerAnalysis};
-pub use runtime::{create_wallet, load_wallet, peek_address, reveal_next_address, WalletDescriptors};
+pub use runtime::{
+    create_wallet, load_wallet, peek_address, reveal_next_address, WalletDescriptors,
+};
 pub use signer::{add_xprv_signer, sign_psbt, SignerKind};

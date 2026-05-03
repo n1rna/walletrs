@@ -647,9 +647,8 @@ pub async fn broadcast_wallet_transaction(
     match bdk_manager.load_wallet(&req.wallet_id) {
         Ok(wallet_result) => {
             let mut _db = wallet_result.store;
-            let client = ElectrumClient::connect(CONFIG.electrs_url()).map_err(|e| {
-                Status::internal(format!("Failed to connect to electrs: {}", e))
-            })?;
+            let client = ElectrumClient::connect(CONFIG.electrs_url())
+                .map_err(|e| Status::internal(format!("Failed to connect to electrs: {}", e)))?;
 
             // Get the finalized PSBT (must have been finalized via finalize_wallet_transaction)
             let psbt_str = db::get_finalized_psbt(&req.wallet_id, &req.txid).map_err(|e| {

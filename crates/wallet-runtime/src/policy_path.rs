@@ -118,8 +118,7 @@ fn validate_policy_path(
 ) -> Result<(), WalletRuntimeError> {
     let mut probe = BTreeMap::new();
     probe.insert(policy.id.clone(), indices.to_vec());
-    policy
-        .get_condition(&probe)
-        .map(|_| ())
-        .map_err(|e| WalletRuntimeError::PolicyPath(format!("policy rejected {:?}: {:?}", indices, e)))
+    policy.get_condition(&probe).map(|_| ()).map_err(|e| {
+        WalletRuntimeError::PolicyPath(format!("policy rejected {:?}: {:?}", indices, e))
+    })
 }

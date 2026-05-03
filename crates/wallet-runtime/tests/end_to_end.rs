@@ -58,7 +58,10 @@ fn singlesig_create_peek_sign_roundtrip() {
         .expect("load_wallet result")
         .expect("loaded wallet present");
     let loaded_addr = peek_address(&loaded, KeychainKind::External, 0);
-    assert_eq!(loaded_addr, addr0, "peek_address differs after persister round-trip");
+    assert_eq!(
+        loaded_addr, addr0,
+        "peek_address differs after persister round-trip"
+    );
 
     // 5. Hand-craft a PSBT that spends a synthetic UTXO sitting at the
     //    receive address. This bypasses BDK's tx_builder (which would
@@ -90,10 +93,11 @@ fn singlesig_create_peek_sign_roundtrip() {
     };
 
     // BIP-173 example testnet P2WPKH address — short bech32 (42 chars).
-    let drain_to = bdk_wallet::bitcoin::Address::from_str("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")
-        .expect("valid drain address")
-        .require_network(Network::Testnet)
-        .expect("testnet network match");
+    let drain_to =
+        bdk_wallet::bitcoin::Address::from_str("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")
+            .expect("valid drain address")
+            .require_network(Network::Testnet)
+            .expect("testnet network match");
 
     let unsigned_tx = Transaction {
         version: Version::TWO,
@@ -168,8 +172,7 @@ fn singlesig_create_peek_sign_roundtrip() {
 
     let signed_all = sign_psbt(&wallet, &mut psbt).expect("sign psbt");
     assert!(
-        !psbt.inputs[0].partial_sigs.is_empty()
-            || psbt.inputs[0].final_script_witness.is_some(),
+        !psbt.inputs[0].partial_sigs.is_empty() || psbt.inputs[0].final_script_witness.is_some(),
         "PSBT input should carry a partial signature after sign_psbt; signed_all={}",
         signed_all
     );

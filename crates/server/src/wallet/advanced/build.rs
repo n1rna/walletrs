@@ -1,4 +1,6 @@
-use policy_core::{descriptor, shape, taproot, DescriptorPair, TaprootLeafInfo, WalletShape, WalletSpec};
+use policy_core::{
+    descriptor, shape, taproot, DescriptorPair, TaprootLeafInfo, WalletShape, WalletSpec,
+};
 
 use crate::db::StoredWallet;
 use crate::wallet::advanced::error::WalletCreationError;

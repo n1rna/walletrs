@@ -33,15 +33,21 @@ pub fn add_signers_for_psbt(
     device_id: &str,
 ) -> Result<i32, Status> {
     if device_id.is_empty() {
-        return Err(Status::invalid_argument("Device ID is required for signing"));
+        return Err(Status::invalid_argument(
+            "Device ID is required for signing",
+        ));
     }
 
     let stored_wallet = db::get_wallet(wallet_id)
         .map_err(|e| Status::internal(format!("Failed to get wallet: {}", e)))?;
 
     let key = db::get_managed_key(&stored_wallet.user_id, device_id, "system")
-        .map_err(|e| Status::internal(format!("Failed to get key for device {}: {}", device_id, e)))?
-        .ok_or_else(|| Status::not_found(format!("No system key found for device {}", device_id)))?;
+        .map_err(|e| {
+            Status::internal(format!("Failed to get key for device {}: {}", device_id, e))
+        })?
+        .ok_or_else(|| {
+            Status::not_found(format!("No system key found for device {}", device_id))
+        })?;
 
     if key.key_type != "system" || !key.has_private_key_material() {
         return Err(Status::invalid_argument(format!(
@@ -101,7 +107,13 @@ pub fn add_signers_for_psbt(
 
     let mut added = 0i32;
     for (keychain, index) in &analysis.required_derivations {
-        match add_xprv_signer(wallet, &account_xpriv, *keychain, *index, analysis.signer_kind) {
+        match add_xprv_signer(
+            wallet,
+            &account_xpriv,
+            *keychain,
+            *index,
+            analysis.signer_kind,
+        ) {
             Ok(()) => {
                 added += 1;
                 debug!(
@@ -127,10 +139,13 @@ pub fn sign_psbt_with_taproot_support(
     psbt: &mut Psbt,
     wallet_id: &str,
 ) -> Result<Option<Psbt>, Status> {
-    info!("=== Starting PSBT Signing Process for wallet: {} ===", wallet_id);
+    info!(
+        "=== Starting PSBT Signing Process for wallet: {} ===",
+        wallet_id
+    );
 
-    let signed_all =
-        wr_sign_psbt(wallet, psbt).map_err(|e| Status::internal(format!("Failed to sign PSBT: {}", e)))?;
+    let signed_all = wr_sign_psbt(wallet, psbt)
+        .map_err(|e| Status::internal(format!("Failed to sign PSBT: {}", e)))?;
 
     if !signed_all {
         warn!("⚠️ Not all inputs were signed — signers may be missing for some inputs");
@@ -156,15 +171,15 @@ pub fn resolve_policy_path_from_leaf(
     leaf_hash: &str,
     liana_descriptor: Option<&LianaDescriptor>,
 ) -> Result<BTreeMap<String, Vec<usize>>, Status> {
-    wr_resolve_path(wallet, leaf_hash, liana_descriptor)
-        .map_err(|e| match e.to_string() {
-            ref s if s.contains("does not match any spending path")
+    wr_resolve_path(wallet, leaf_hash, liana_descriptor).map_err(|e| match e.to_string() {
+        ref s
+            if s.contains("does not match any spending path")
                 || s.contains("provided but wallet has no Liana descriptor") =>
-            {
-                Status::invalid_argument(s.clone())
-            }
-            _ => Status::internal(e.to_string()),
-        })
+        {
+            Status::invalid_argument(s.clone())
+        }
+        _ => Status::internal(e.to_string()),
+    })
 }
 
 #[cfg(test)]
