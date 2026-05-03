@@ -1,0 +1,33 @@
+[package]
+name = "wallet-runtime"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "BSD-3-Clause"
+description = "BDK 1.x wallet runtime — generic over any WalletPersister, with PSBT signing, Liana leaf-path resolution, and an Electrum client wrapper. No service or DB dependencies."
+
+[dependencies]
+policy-core = { path = "../policy-core" }
+bdk_wallet = { version = "1.1.0", features = ["bip39", "keys-bip39"] }
+bdk_file_store = "0.18.1"
+bdk_electrum = "0.21.0"
+miniscript = { version = "12.0", features = ["serde", "compiler", "base64"] }
+liana = { path = "../../contrib/liana" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+hex = "0.4"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+warnings = { level = "deny", priority = -1 }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+result_large_err = "allow"
+too_many_arguments = "allow"
+redundant_field_names = "allow"
+collapsible_if = "allow"

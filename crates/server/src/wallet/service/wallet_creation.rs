@@ -8,7 +8,7 @@ use crate::proto::pb::{
     SpendingCondition as ProtoSpendingCondition, TaprootLeafInfo as ProtoTaprootLeafInfo,
 };
 use crate::wallet::advanced::{
-    self, PolicyType, PreferredScriptType, SpendingCondition, WalletSpec,
+    self, ManagedKey, PolicyType, PreferredScriptType, SpendingCondition, WalletSpec,
 };
 
 pub async fn create_generic_wallet(
@@ -120,7 +120,7 @@ fn condition_from_proto(proto: &ProtoSpendingCondition) -> Result<SpendingCondit
 fn load_managed_keys(
     user_id: &str,
     conditions: &[SpendingCondition],
-) -> Result<BTreeMap<String, StoredManagedKey>, String> {
+) -> Result<BTreeMap<String, ManagedKey>, String> {
     let mut device_ids: Vec<String> = conditions
         .iter()
         .flat_map(|c| c.managed_key_ids.iter().cloned())
@@ -131,7 +131,7 @@ fn load_managed_keys(
     let mut managed_keys = BTreeMap::new();
     for device_id in device_ids {
         let key = lookup_managed_key(user_id, &device_id)?;
-        managed_keys.insert(device_id, key);
+        managed_keys.insert(device_id, key.to_managed_key());
     }
 
     if managed_keys.is_empty() {

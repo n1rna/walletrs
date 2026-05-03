@@ -3,11 +3,9 @@ use std::str::FromStr;
 
 use miniscript::descriptor::DescriptorPublicKey;
 
-use crate::db::StoredManagedKey;
-use crate::wallet::advanced::error::WalletCreationError;
-use crate::wallet::advanced::spec::{
-    PolicyType, PreferredScriptType, SpendingCondition, WalletSpec,
-};
+use crate::error::PolicyError;
+use crate::managed_key::ManagedKey;
+use crate::spec::{PolicyType, PreferredScriptType, SpendingCondition, WalletSpec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScriptKind {
@@ -73,7 +71,7 @@ pub enum WalletShape {
 ///    sig wallet or a flat multisig in the requested script kind.
 /// 3. Otherwise: a Liana taproot policy. P2WSH (SegwitV0) is not supported for
 ///    timelocked policies in this build.
-pub fn classify(spec: &WalletSpec) -> Result<WalletShape, WalletCreationError> {
+pub fn classify(spec: &WalletSpec) -> Result<WalletShape, PolicyError> {
     let resolved = resolve_conditions(spec)?;
 
     if can_combine_taproot_multisig(spec, &resolved) {
@@ -85,7 +83,7 @@ pub fn classify(spec: &WalletSpec) -> Result<WalletShape, WalletCreationError> {
     }
 
     if spec.preferred_script_type == PreferredScriptType::SegwitV0 {
-        return Err(WalletCreationError::InvalidPolicy(
+        return Err(PolicyError::InvalidPolicy(
             "SegWit v0 is not supported for policy-based wallets with timelocks".to_string(),
         ));
     }
@@ -100,7 +98,7 @@ struct ResolvedCondition {
     path: PolicyPath,
 }
 
-fn resolve_conditions(spec: &WalletSpec) -> Result<Vec<ResolvedCondition>, WalletCreationError> {
+fn resolve_conditions(spec: &WalletSpec) -> Result<Vec<ResolvedCondition>, PolicyError> {
     spec.conditions
         .iter()
         .map(|cond| resolve_condition(cond, &spec.managed_keys))
@@ -109,8 +107,8 @@ fn resolve_conditions(spec: &WalletSpec) -> Result<Vec<ResolvedCondition>, Walle
 
 fn resolve_condition(
     cond: &SpendingCondition,
-    managed_keys: &BTreeMap<String, StoredManagedKey>,
-) -> Result<ResolvedCondition, WalletCreationError> {
+    managed_keys: &BTreeMap<String, ManagedKey>,
+) -> Result<ResolvedCondition, PolicyError> {
     let path = match cond.policy {
         PolicyType::Single => {
             let key = resolve_key(managed_keys, &cond.managed_key_ids[0])?;
@@ -137,18 +135,18 @@ fn resolve_condition(
 }
 
 fn resolve_key(
-    managed_keys: &BTreeMap<String, StoredManagedKey>,
+    managed_keys: &BTreeMap<String, ManagedKey>,
     device_id: &str,
-) -> Result<DescriptorPublicKey, WalletCreationError> {
+) -> Result<DescriptorPublicKey, PolicyError> {
     let key = managed_keys.get(device_id).ok_or_else(|| {
-        WalletCreationError::KeyManagement(format!("Key not found for device {}", device_id))
+        PolicyError::KeyManagement(format!("Key not found for device {}", device_id))
     })?;
 
     let xpub_str = key.tpub.as_deref().unwrap_or(&key.xpub);
     let xpub_str = ensure_key_origin_has_path(xpub_str, &key.fingerprint, &key.derivation_path);
 
     DescriptorPublicKey::from_str(&xpub_str)
-        .map_err(|e| WalletCreationError::KeyManagement(format!("Invalid xpub: {}", e)))
+        .map_err(|e| PolicyError::KeyManagement(format!("Invalid xpub: {}", e)))
 }
 
 /// Inject `derivation_path` into the `[fingerprint]` origin block of an xpub
@@ -247,9 +245,7 @@ fn try_single_condition_shape(
 /// behavior). Recoveries with `timelock == 0` are assigned default timelocks
 /// of `144 * (idx + 1)` blocks (~1 day per slot) and the recovery list is
 /// sorted by effective timelock so it matches Liana's BTreeMap iteration order.
-fn build_timelocked_policy(
-    resolved: Vec<ResolvedCondition>,
-) -> Result<WalletShape, WalletCreationError> {
+fn build_timelocked_policy(resolved: Vec<ResolvedCondition>) -> Result<WalletShape, PolicyError> {
     let mut primary: Option<(String, PolicyPath)> = None;
     let mut recoveries: Vec<RecoveryPath> = Vec::new();
 
@@ -269,7 +265,7 @@ fn build_timelocked_policy(
         Some(p) => p,
         None => {
             if recoveries.is_empty() {
-                return Err(WalletCreationError::InvalidPolicy(
+                return Err(PolicyError::InvalidPolicy(
                     "Must have either primary path or recovery conditions".to_string(),
                 ));
             }

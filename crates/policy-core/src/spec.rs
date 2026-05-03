@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, HashSet};
 use bdk_wallet::bitcoin::Network;
 use serde::{Deserialize, Serialize};
 
-use crate::db::StoredManagedKey;
-use crate::wallet::advanced::error::WalletCreationError;
+use crate::error::PolicyError;
+use crate::managed_key::ManagedKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PolicyType {
@@ -34,14 +34,14 @@ pub struct SpendingCondition {
 pub struct WalletSpec {
     pub network: Network,
     pub conditions: Vec<SpendingCondition>,
-    pub managed_keys: BTreeMap<String, StoredManagedKey>,
+    pub managed_keys: BTreeMap<String, ManagedKey>,
     pub preferred_script_type: PreferredScriptType,
 }
 
 impl WalletSpec {
-    pub fn validate(&self) -> Result<(), WalletCreationError> {
+    pub fn validate(&self) -> Result<(), PolicyError> {
         if self.conditions.is_empty() {
-            return Err(WalletCreationError::InvalidPolicy(
+            return Err(PolicyError::InvalidPolicy(
                 "At least one spending condition is required".to_string(),
             ));
         }
@@ -51,32 +51,32 @@ impl WalletSpec {
 
         for cond in &self.conditions {
             if cond.id.is_empty() {
-                return Err(WalletCreationError::InvalidPolicy(
+                return Err(PolicyError::InvalidPolicy(
                     "Each spending condition must have an ID".to_string(),
                 ));
             }
             if !seen_ids.insert(&cond.id) {
-                return Err(WalletCreationError::InvalidPolicy(format!(
+                return Err(PolicyError::InvalidPolicy(format!(
                     "Duplicate spending condition ID: {}",
                     cond.id
                 )));
             }
             if cond.managed_key_ids.is_empty() {
-                return Err(WalletCreationError::InvalidPolicy(
+                return Err(PolicyError::InvalidPolicy(
                     "Each condition must have at least one key".to_string(),
                 ));
             }
             match cond.policy {
                 PolicyType::Single => {
                     if cond.managed_key_ids.len() != 1 {
-                        return Err(WalletCreationError::InvalidPolicy(
+                        return Err(PolicyError::InvalidPolicy(
                             "Single policy requires exactly one key".to_string(),
                         ));
                     }
                 }
                 PolicyType::Multi => {
                     if cond.threshold == 0 || cond.threshold > cond.managed_key_ids.len() {
-                        return Err(WalletCreationError::InvalidPolicy(
+                        return Err(PolicyError::InvalidPolicy(
                             "Invalid multi-signature threshold".to_string(),
                         ));
                     }
@@ -88,7 +88,7 @@ impl WalletSpec {
         }
 
         if primary_count > 1 {
-            return Err(WalletCreationError::InvalidPolicy(
+            return Err(PolicyError::InvalidPolicy(
                 "Only one primary condition is allowed".to_string(),
             ));
         }
@@ -101,7 +101,7 @@ impl WalletSpec {
 mod tests {
     use super::*;
 
-    fn empty_keys() -> BTreeMap<String, StoredManagedKey> {
+    fn empty_keys() -> BTreeMap<String, ManagedKey> {
         BTreeMap::new()
     }
 

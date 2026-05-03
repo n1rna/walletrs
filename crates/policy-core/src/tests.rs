@@ -1,4 +1,4 @@
-//! Cross-module integration tests for the advanced wallet pipeline.
+//! Cross-module integration tests for the policy pipeline.
 
 use std::collections::BTreeMap;
 
@@ -6,15 +6,14 @@ use bdk_wallet::bitcoin::bip32::{Xpriv, Xpub};
 use bdk_wallet::bitcoin::secp256k1::Secp256k1;
 use bdk_wallet::bitcoin::Network;
 
-use crate::db::StoredManagedKey;
-use crate::wallet::advanced::descriptor;
-use crate::wallet::advanced::shape::{self, ScriptKind, WalletShape};
-use crate::wallet::advanced::spec::{
-    PolicyType, PreferredScriptType, SpendingCondition, WalletSpec,
-};
+use crate::descriptor;
+use crate::managed_key::ManagedKey;
+use crate::shape::{self, ScriptKind, WalletShape};
+use crate::spec::{PolicyType, PreferredScriptType, SpendingCondition, WalletSpec};
 
 struct Fixture {
-    pub key: StoredManagedKey,
+    pub device_id: String,
+    pub key: ManagedKey,
 }
 
 fn make_key(device_id: &str, seed: u64) -> Fixture {
@@ -36,21 +35,20 @@ fn make_key(device_id: &str, seed: u64) -> Fixture {
     let liana_format_xpub = format!("[{}]{}/<0;1>/*", fingerprint, xpub);
 
     Fixture {
-        key: StoredManagedKey::new_customer_key(
-            "user-test",
-            device_id,
-            "test key",
-            &liana_format_xpub,
-            &fingerprint,
-            "m/84'/1'/0'",
-        ),
+        device_id: device_id.to_string(),
+        key: ManagedKey {
+            fingerprint,
+            derivation_path: "m/84'/1'/0'".to_string(),
+            xpub: liana_format_xpub,
+            tpub: None,
+        },
     }
 }
 
-fn keys(fixtures: &[&Fixture]) -> BTreeMap<String, StoredManagedKey> {
+fn keys(fixtures: &[&Fixture]) -> BTreeMap<String, ManagedKey> {
     fixtures
         .iter()
-        .map(|f| (f.key.device_id.clone(), f.key.clone()))
+        .map(|f| (f.device_id.clone(), f.key.clone()))
         .collect()
 }
 

@@ -1,9 +1,9 @@
+use policy_core::{
+    descriptor, shape, taproot, DescriptorPair, TaprootLeafInfo, WalletShape, WalletSpec,
+};
+
 use crate::db::StoredWallet;
-use crate::wallet::advanced::descriptor::{self, DescriptorPair};
 use crate::wallet::advanced::error::WalletCreationError;
-use crate::wallet::advanced::shape::{self, WalletShape};
-use crate::wallet::advanced::spec::WalletSpec;
-use crate::wallet::advanced::taproot::{self, TaprootLeafInfo};
 use crate::wallet::bdk::BdkWalletManager;
 
 #[derive(Debug, Clone)]
@@ -29,9 +29,7 @@ pub fn build_wallet(
     stored_wallet: &StoredWallet,
 ) -> Result<WalletBuildResult, WalletCreationError> {
     if stored_wallet.wallet_id.is_empty() {
-        return Err(WalletCreationError::InvalidPolicy(
-            "Wallet ID is required".to_string(),
-        ));
+        return Err(WalletCreationError::invalid_policy("Wallet ID is required"));
     }
 
     spec.validate()?;

@@ -1,3 +1,13 @@
+//! Walletrs-server-specific BDK wallet orchestrator.
+//!
+//! Owns the multi-tenant concerns BDK doesn't care about: per-wallet locking
+//! to serialise concurrent access, walletrs's pluggable
+//! `crate::storage::AnyBackend` (filesystem or S3), and uploading the BDK
+//! `bdk_file_store::Store` blob to that backend after every persist via
+//! `R2BackedStore`. The actual wallet construction / loading is delegated to
+//! `wallet-runtime`, which has no opinion about where the BDK changeset
+//! lives.
+
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -5,10 +15,13 @@ use std::sync::Arc;
 
 use bdk_file_store::Store;
 use bdk_wallet::bitcoin::Network;
-use bdk_wallet::{ChangeSet, PersistedWallet, Wallet, WalletPersister};
+use bdk_wallet::{ChangeSet, PersistedWallet, WalletPersister};
 use once_cell::sync::Lazy;
 use parking_lot::{ArcMutexGuard, Mutex, RawMutex};
 use thiserror::Error;
+use wallet_runtime::{
+    create_wallet as wr_create_wallet, load_wallet as wr_load_wallet, WalletDescriptors,
+};
 
 use crate::db::{self, StoredWallet};
 use crate::storage::{AnyBackend, StorageBackend};
@@ -135,11 +148,6 @@ impl BdkWalletManager {
                 "Wallet ID cannot be empty".to_string(),
             ));
         }
-        if external_descriptor.is_empty() || internal_descriptor.is_empty() {
-            return Err(BdkWalletError::InvalidDescriptor(
-                "Descriptors cannot be empty".to_string(),
-            ));
-        }
 
         db::init_all_storage()
             .map_err(|e| BdkWalletError::Database(format!("init storage: {}", e)))?;
@@ -150,23 +158,15 @@ impl BdkWalletManager {
         let object_key = bdk_store_object_key(wallet_id);
         let local_path = local_store_path(wallet_id);
 
-        // Fresh create: drop any stale local or remote state so open_or_create_new
-        // returns an empty store for PersistedWallet::create's initialize() check.
+        // Fresh create: drop any stale local or remote state so wallet-runtime's
+        // create_wallet sees an empty store on its initialize() check.
         discard_local(&local_path)?;
         let _ = backend.delete_file(&object_key);
 
         let mut r2_store = open_backed_store(&local_path, backend, object_key)?;
+        let descriptors = WalletDescriptors::new(external_descriptor, internal_descriptor);
 
-        let mut wallet = Wallet::create(
-            external_descriptor.to_string(),
-            internal_descriptor.to_string(),
-        )
-        .network(self.network)
-        .create_wallet(&mut r2_store)
-        .map_err(|e| BdkWalletError::BdkWallet(e.to_string()))?;
-
-        wallet
-            .persist(&mut r2_store)
+        let _wallet = wr_create_wallet(&mut r2_store, self.network, &descriptors)
             .map_err(|e| BdkWalletError::BdkWallet(e.to_string()))?;
 
         Ok(WalletCreationResult {
@@ -213,10 +213,7 @@ impl BdkWalletManager {
 
         let mut r2_store = open_backed_store(&local_path, backend, object_key)?;
 
-        match Wallet::load()
-            .check_network(self.network)
-            .load_wallet(&mut r2_store)
-        {
+        match wr_load_wallet(&mut r2_store, self.network) {
             Ok(Some(wallet)) => Ok(WalletLoadResult {
                 wallet,
                 store: r2_store,

@@ -28,6 +28,19 @@ impl StoredManagedKey {
         format!("user::{}::device::{}::{}", user_id, device_id, key_type)
     }
 
+    /// Project the fields the policy pipeline cares about (origin metadata +
+    /// xpub/tpub) into the lightweight `policy_core::ManagedKey` shape. The
+    /// pipeline never sees DB plumbing fields like `user_id`, key custody
+    /// type, or hot-key material — those are server concerns.
+    pub fn to_managed_key(&self) -> policy_core::ManagedKey {
+        policy_core::ManagedKey {
+            fingerprint: self.fingerprint.clone(),
+            derivation_path: self.derivation_path.clone(),
+            xpub: self.xpub.clone(),
+            tpub: self.tpub.clone(),
+        }
+    }
+
     pub fn get_key_identifier(&self) -> String {
         Self::generate_key_identifier(&self.user_id, &self.device_id, &self.key_type)
     }
