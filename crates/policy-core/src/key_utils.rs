@@ -1,11 +1,54 @@
 use std::str::FromStr;
 
-use bdk_wallet::bitcoin::bip32::{DerivationPath, Xpriv, Xpub};
-use bdk_wallet::bitcoin::secp256k1::Secp256k1;
+use bdk_wallet::bitcoin::bip32::{ChainCode, DerivationPath, Xpriv, Xpub};
+use bdk_wallet::bitcoin::hashes::{sha256, Hash};
+use bdk_wallet::bitcoin::secp256k1::{self, Secp256k1};
 use bdk_wallet::bitcoin::Network;
 use bdk_wallet::keys::bip39::{Language, Mnemonic, WordCount};
 use bdk_wallet::keys::GeneratableKey;
 use bdk_wallet::miniscript;
+
+/// BIP-341 NUMS point. Provably nobody knows the discrete log.
+/// Same constant `descriptor.rs::NUMS_KEY` uses for taproot internal-key
+/// suppression in `tr(NUMS, multi_a(...))`. Exposed here too because
+/// `unspendable_primary_xpub` builds an Xpub on top of it.
+pub const BIP341_NUMS_HEX: &str =
+    "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
+
+/// Build the deterministic NUMS-derived Xpub Liana uses for a wallet's
+/// "unspendable primary" path (QBL-235). Construction mirrors
+/// `liana::descriptors::analysis::unspendable_internal_xpub` so the
+/// resulting wallet is recognised as unspendable-primary by Liana's
+/// own policy parser too.
+///
+/// The chain code is `sha256(concat(serialize(pubkey) for each
+/// recovery xpub))` — this is what makes it deterministic from the
+/// recovery key set, so the same wallet config always reproduces the
+/// same primary key. Depth, parent fingerprint, and child number are
+/// all zeroed; the public key is the BIP-341 NUMS point.
+///
+/// Caller passes the recovery xpubs in the order they'll appear in
+/// the descriptor (typically: ascending timelock, multi-key paths
+/// flattened in their declared order). Mismatching the order produces
+/// a different chain code — different but still unspendable, just not
+/// the canonical one.
+pub fn unspendable_primary_xpub(recovery_xpubs: &[Xpub], network: Network) -> Xpub {
+    let mut concat = Vec::with_capacity(recovery_xpubs.len() * 33);
+    for xpub in recovery_xpubs {
+        concat.extend_from_slice(&xpub.public_key.serialize());
+    }
+    let chain_code = ChainCode::from(sha256::Hash::hash(&concat).as_byte_array());
+    let public_key = secp256k1::PublicKey::from_str(BIP341_NUMS_HEX)
+        .expect("BIP341_NUMS_HEX is a valid compressed pubkey");
+    Xpub {
+        public_key,
+        chain_code,
+        depth: 0,
+        parent_fingerprint: [0u8; 4].into(),
+        child_number: 0u32.into(),
+        network: network.into(),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct KeyGenerationResult {
@@ -121,5 +164,38 @@ mod tests {
     fn test_format_key_with_fingerprint() {
         let formatted = KeyUtils::format_key_with_fingerprint("12345678", "xpub123...");
         assert_eq!(formatted, "[12345678]xpub123...");
+    }
+
+    #[test]
+    fn test_unspendable_primary_xpub_is_deterministic() {
+        // Two synthetic recovery xpubs, same set both times → same
+        // chain code → same xpub. This is the property Liana's
+        // policy parser relies on to detect unspendable-primary.
+        let xpub_a = KeyUtils::generate_complete_key_set(Network::Regtest).xpub;
+        let xpub_b = KeyUtils::generate_complete_key_set(Network::Regtest).xpub;
+        let recoveries = vec![xpub_a, xpub_b];
+        let first = unspendable_primary_xpub(&recoveries, Network::Regtest);
+        let second = unspendable_primary_xpub(&recoveries, Network::Regtest);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_unspendable_primary_xpub_uses_nums_pubkey() {
+        let recoveries = vec![KeyUtils::generate_complete_key_set(Network::Regtest).xpub];
+        let xpub = unspendable_primary_xpub(&recoveries, Network::Regtest);
+        let nums_pk =
+            secp256k1::PublicKey::from_str(BIP341_NUMS_HEX).expect("valid NUMS hex");
+        assert_eq!(xpub.public_key, nums_pk);
+        assert_eq!(xpub.depth, 0);
+        assert_eq!(u32::from(xpub.child_number), 0);
+    }
+
+    #[test]
+    fn test_unspendable_primary_xpub_changes_with_recoveries() {
+        let xpub_a = KeyUtils::generate_complete_key_set(Network::Regtest).xpub;
+        let xpub_b = KeyUtils::generate_complete_key_set(Network::Regtest).xpub;
+        let one = unspendable_primary_xpub(&[xpub_a], Network::Regtest);
+        let two = unspendable_primary_xpub(&[xpub_a, xpub_b], Network::Regtest);
+        assert_ne!(one.chain_code, two.chain_code);
     }
 }

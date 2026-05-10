@@ -29,7 +29,7 @@ mod tests;
 
 pub use descriptor::{build as build_descriptor, DescriptorPair};
 pub use error::PolicyError;
-pub use key_utils::{KeyGenerationResult, KeyUtils};
+pub use key_utils::{unspendable_primary_xpub, KeyGenerationResult, KeyUtils, BIP341_NUMS_HEX};
 pub use managed_key::ManagedKey;
 pub use shape::{classify, PolicyPath, RecoveryPath, ScriptKind, WalletShape};
 pub use spec::{PolicyType, PreferredScriptType, SpendingCondition, WalletSpec};
