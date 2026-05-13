@@ -240,6 +240,7 @@ mod tests {
                     threshold: 2,
                     policy: PolicyType::Multi,
                     managed_key_ids: vec!["d1".to_string(), "d2".to_string()],
+                    is_unspendable: false,
                 },
                 SpendingCondition {
                     id: "recovery".to_string(),
@@ -247,6 +248,7 @@ mod tests {
                     timelock: 144,
                     threshold: 1,
                     policy: PolicyType::Single,
+                    is_unspendable: false,
                     managed_key_ids: vec!["d3".to_string()],
                 },
             ],

@@ -350,6 +350,12 @@ message SpendingCondition {
 	uint32 threshold = 4; // Threshold for multi-sig
 	PolicyType policy = 5; // Single or Multi
 	repeated string managed_key_ids = 6; // List of managed key IDs
+	// When true, the primary path is replaced with a deterministic
+	// NUMS-derived xpub, making it provably unspendable. Only valid on
+	// a primary condition that has a non-primary recovery condition
+	// alongside it. Used for cold-storage / inheritance wallets where
+	// the user wants no fast-spending path.
+	bool is_unspendable = 7;
 }
 
 message CreateGenericWalletRequest {
