@@ -1,9 +1,10 @@
 //! Cross-module integration tests for the policy pipeline.
 
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
 use bdk_wallet::bitcoin::bip32::{Xpriv, Xpub};
-use bdk_wallet::bitcoin::secp256k1::Secp256k1;
+use bdk_wallet::bitcoin::secp256k1::{self, Secp256k1};
 use bdk_wallet::bitcoin::Network;
 
 use crate::descriptor;
@@ -67,6 +68,7 @@ fn cond(
         threshold,
         policy,
         managed_key_ids: keys.iter().map(|s| s.to_string()).collect(),
+        is_unspendable: false,
     }
 }
 
@@ -220,6 +222,60 @@ fn classifies_timelocked_policy_when_primary_has_recovery() {
         WalletShape::TimelockedPolicy { recoveries, .. } => {
             assert_eq!(recoveries.len(), 1);
             assert_eq!(recoveries[0].timelock, 144);
+        }
+        other => panic!("expected TimelockedPolicy, got {:?}", other),
+    }
+}
+
+#[test]
+fn classifies_unspendable_primary_to_nums_xpub() {
+    use crate::key_utils::BIP341_NUMS_HEX;
+
+    let f_rec = make_key("device-rec", 1);
+    let unspendable = SpendingCondition {
+        id: "primary".to_string(),
+        is_primary: true,
+        timelock: 0,
+        threshold: 0,
+        policy: PolicyType::Single,
+        managed_key_ids: Vec::new(),
+        is_unspendable: true,
+    };
+    let recovery = cond(
+        "recovery",
+        false,
+        144,
+        PolicyType::Single,
+        1,
+        &["device-rec"],
+    );
+    let spec = WalletSpec {
+        network: Network::Testnet,
+        conditions: vec![unspendable, recovery],
+        managed_keys: keys(&[&f_rec]),
+        preferred_script_type: PreferredScriptType::Auto,
+    };
+
+    let shape = shape::classify(&spec).unwrap();
+    match shape {
+        WalletShape::TimelockedPolicy {
+            primary,
+            recoveries,
+            ..
+        } => {
+            assert_eq!(recoveries.len(), 1);
+            let primary_key = match primary {
+                shape::PolicyPath::Single(k) => k,
+                other => panic!("expected single-key primary, got {:?}", other),
+            };
+            // Substituted key must be the BIP-341 NUMS pubkey.
+            let nums = secp256k1::PublicKey::from_str(BIP341_NUMS_HEX).unwrap();
+            let inner_xpub = match primary_key {
+                miniscript::descriptor::DescriptorPublicKey::XPub(x) => x.xkey,
+                miniscript::descriptor::DescriptorPublicKey::MultiXPub(m) => m.xkey,
+                other => panic!("unexpected key variant: {:?}", other),
+            };
+            assert_eq!(inner_xpub.public_key, nums);
         }
         other => panic!("expected TimelockedPolicy, got {:?}", other),
     }

@@ -27,6 +27,15 @@ pub struct SpendingCondition {
     pub threshold: usize,
     pub policy: PolicyType,
     pub managed_key_ids: Vec<String>,
+    /// When `true`, this condition's keys are replaced by a deterministic
+    /// NUMS-derived xpub at descriptor-build time, making the path
+    /// provably unspendable. Only allowed on a primary condition, and
+    /// only when at least one real (non-primary) recovery condition is
+    /// present — the resulting wallet is recovery-only, matching Liana
+    /// Desktop's "no primary key" / inheritance affordance.
+    /// `#[serde(default)]` keeps older serialized specs readable.
+    #[serde(default)]
+    pub is_unspendable: bool,
 }
 
 /// Validated input describing the wallet a caller wants to create.
@@ -48,6 +57,8 @@ impl WalletSpec {
 
         let mut seen_ids: HashSet<&str> = HashSet::new();
         let mut primary_count = 0;
+        let mut unspendable_count = 0;
+        let mut recovery_count = 0;
 
         for cond in &self.conditions {
             if cond.id.is_empty() {
@@ -61,35 +72,68 @@ impl WalletSpec {
                     cond.id
                 )));
             }
-            if cond.managed_key_ids.is_empty() {
-                return Err(PolicyError::InvalidPolicy(
-                    "Each condition must have at least one key".to_string(),
-                ));
-            }
-            match cond.policy {
-                PolicyType::Single => {
-                    if cond.managed_key_ids.len() != 1 {
-                        return Err(PolicyError::InvalidPolicy(
-                            "Single policy requires exactly one key".to_string(),
-                        ));
-                    }
+
+            // Unspendable conditions deliberately carry no keys and skip
+            // the policy/threshold checks — the descriptor builder
+            // substitutes a deterministic NUMS-derived xpub at build
+            // time. Surface a clear error if a caller tries to mix
+            // is_unspendable with a non-primary slot.
+            if cond.is_unspendable {
+                if !cond.is_primary {
+                    return Err(PolicyError::InvalidPolicy(format!(
+                        "Unspendable condition '{}' must also be marked is_primary",
+                        cond.id
+                    )));
                 }
-                PolicyType::Multi => {
-                    if cond.threshold == 0 || cond.threshold > cond.managed_key_ids.len() {
-                        return Err(PolicyError::InvalidPolicy(
-                            "Invalid multi-signature threshold".to_string(),
-                        ));
+                if !cond.managed_key_ids.is_empty() {
+                    return Err(PolicyError::InvalidPolicy(format!(
+                        "Unspendable condition '{}' must have no managed keys",
+                        cond.id
+                    )));
+                }
+                unspendable_count += 1;
+            } else {
+                if cond.managed_key_ids.is_empty() {
+                    return Err(PolicyError::InvalidPolicy(
+                        "Each condition must have at least one key".to_string(),
+                    ));
+                }
+                match cond.policy {
+                    PolicyType::Single => {
+                        if cond.managed_key_ids.len() != 1 {
+                            return Err(PolicyError::InvalidPolicy(
+                                "Single policy requires exactly one key".to_string(),
+                            ));
+                        }
+                    }
+                    PolicyType::Multi => {
+                        if cond.threshold == 0 || cond.threshold > cond.managed_key_ids.len() {
+                            return Err(PolicyError::InvalidPolicy(
+                                "Invalid multi-signature threshold".to_string(),
+                            ));
+                        }
                     }
                 }
             }
             if cond.is_primary {
                 primary_count += 1;
+            } else {
+                recovery_count += 1;
             }
         }
 
         if primary_count > 1 {
             return Err(PolicyError::InvalidPolicy(
                 "Only one primary condition is allowed".to_string(),
+            ));
+        }
+
+        // An unspendable primary only makes sense when there's at
+        // least one real recovery path — otherwise the wallet would
+        // be permanently unable to spend.
+        if unspendable_count > 0 && recovery_count == 0 {
+            return Err(PolicyError::InvalidPolicy(
+                "Unspendable primary requires at least one recovery condition".to_string(),
             ));
         }
 
@@ -120,6 +164,19 @@ mod tests {
             threshold,
             policy,
             managed_key_ids: keys.iter().map(|s| s.to_string()).collect(),
+            is_unspendable: false,
+        }
+    }
+
+    fn unspendable_cond(id: &str) -> SpendingCondition {
+        SpendingCondition {
+            id: id.to_string(),
+            is_primary: true,
+            timelock: 0,
+            threshold: 0,
+            policy: PolicyType::Single,
+            managed_key_ids: Vec::new(),
+            is_unspendable: true,
         }
     }
 
@@ -196,5 +253,62 @@ mod tests {
             preferred_script_type: PreferredScriptType::Auto,
         };
         assert!(spec.validate().is_ok());
+    }
+
+    #[test]
+    fn accepts_unspendable_primary_with_recovery() {
+        let spec = WalletSpec {
+            network: Network::Testnet,
+            conditions: vec![
+                unspendable_cond("primary"),
+                cond("recovery", false, 144, PolicyType::Single, 1, &["k1"]),
+            ],
+            managed_keys: empty_keys(),
+            preferred_script_type: PreferredScriptType::Auto,
+        };
+        assert!(spec.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_unspendable_without_recovery() {
+        let spec = WalletSpec {
+            network: Network::Testnet,
+            conditions: vec![unspendable_cond("primary")],
+            managed_keys: empty_keys(),
+            preferred_script_type: PreferredScriptType::Auto,
+        };
+        assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_unspendable_non_primary() {
+        let mut bad = unspendable_cond("recovery");
+        bad.is_primary = false;
+        let spec = WalletSpec {
+            network: Network::Testnet,
+            conditions: vec![
+                cond("primary", true, 0, PolicyType::Single, 1, &["k1"]),
+                bad,
+            ],
+            managed_keys: empty_keys(),
+            preferred_script_type: PreferredScriptType::Auto,
+        };
+        assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_unspendable_with_keys() {
+        let mut bad = unspendable_cond("primary");
+        bad.managed_key_ids = vec!["k1".to_string()];
+        let spec = WalletSpec {
+            network: Network::Testnet,
+            conditions: vec![
+                bad,
+                cond("recovery", false, 144, PolicyType::Single, 1, &["k2"]),
+            ],
+            managed_keys: empty_keys(),
+            preferred_script_type: PreferredScriptType::Auto,
+        };
+        assert!(spec.validate().is_err());
     }
 }

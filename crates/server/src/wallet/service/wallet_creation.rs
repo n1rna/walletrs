@@ -114,6 +114,7 @@ fn condition_from_proto(proto: &ProtoSpendingCondition) -> Result<SpendingCondit
         threshold: proto.threshold as usize,
         policy,
         managed_key_ids: proto.managed_key_ids.clone(),
+        is_unspendable: proto.is_unspendable,
     })
 }
 

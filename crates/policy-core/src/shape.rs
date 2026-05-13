@@ -1,9 +1,12 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
+use bdk_wallet::bitcoin::bip32::Xpub;
+use bdk_wallet::bitcoin::Network;
 use miniscript::descriptor::DescriptorPublicKey;
 
 use crate::error::PolicyError;
+use crate::key_utils::{unspendable_primary_xpub, KeyUtils};
 use crate::managed_key::ManagedKey;
 use crate::spec::{PolicyType, PreferredScriptType, SpendingCondition, WalletSpec};
 
@@ -88,14 +91,19 @@ pub fn classify(spec: &WalletSpec) -> Result<WalletShape, PolicyError> {
         ));
     }
 
-    build_timelocked_policy(resolved)
+    build_timelocked_policy(resolved, spec.network)
 }
 
 struct ResolvedCondition {
     id: String,
     is_primary: bool,
+    is_unspendable: bool,
     timelock: u16,
-    path: PolicyPath,
+    /// `None` only when `is_unspendable` is true — the actual key is
+    /// substituted in `build_timelocked_policy` once we know all the
+    /// recovery xpubs (the unspendable xpub's chain code derives from
+    /// them).
+    path: Option<PolicyPath>,
 }
 
 fn resolve_conditions(spec: &WalletSpec) -> Result<Vec<ResolvedCondition>, PolicyError> {
@@ -109,6 +117,15 @@ fn resolve_condition(
     cond: &SpendingCondition,
     managed_keys: &BTreeMap<String, ManagedKey>,
 ) -> Result<ResolvedCondition, PolicyError> {
+    if cond.is_unspendable {
+        return Ok(ResolvedCondition {
+            id: cond.id.clone(),
+            is_primary: cond.is_primary,
+            is_unspendable: true,
+            timelock: cond.timelock,
+            path: None,
+        });
+    }
     let path = match cond.policy {
         PolicyType::Single => {
             let key = resolve_key(managed_keys, &cond.managed_key_ids[0])?;
@@ -129,8 +146,9 @@ fn resolve_condition(
     Ok(ResolvedCondition {
         id: cond.id.clone(),
         is_primary: cond.is_primary,
+        is_unspendable: false,
         timelock: cond.timelock,
-        path,
+        path: Some(path),
     })
 }
 
@@ -173,8 +191,46 @@ fn ensure_key_origin_has_path(xpub: &str, fingerprint: &str, derivation_path: &s
     format!("{}{}", replacement, &xpub[fingerprint_only.len()..])
 }
 
+/// Compute the deterministic NUMS-derived xpub Liana uses for
+/// unspendable primary paths, sourcing the chain-code material from
+/// every resolved recovery key. Returns a `DescriptorPublicKey` formatted
+/// as a Liana key expression at fingerprint `00000000` so it slots into
+/// `PolicyPath::Single` like any other key.
+fn build_unspendable_primary_xpub(
+    recoveries: &[RecoveryPath],
+    network: Network,
+) -> Result<DescriptorPublicKey, PolicyError> {
+    let mut xpubs: Vec<Xpub> = Vec::new();
+    for rec in recoveries {
+        for key in rec.path.keys() {
+            let xpub = match key {
+                DescriptorPublicKey::XPub(x) => x.xkey,
+                DescriptorPublicKey::MultiXPub(m) => m.xkey,
+                DescriptorPublicKey::Single(_) => {
+                    return Err(PolicyError::InvalidPolicy(
+                        "Unspendable primary requires xpub recovery keys; single pubkeys not supported".to_string(),
+                    ));
+                }
+            };
+            xpubs.push(xpub);
+        }
+    }
+    let xpub = unspendable_primary_xpub(&xpubs, network);
+    let formatted = KeyUtils::format_key_for_liana("00000000", "", &xpub.to_string());
+    DescriptorPublicKey::from_str(&formatted).map_err(|e| {
+        PolicyError::InvalidPolicy(format!("unspendable primary descriptor key: {}", e))
+    })
+}
+
 fn can_combine_taproot_multisig(spec: &WalletSpec, resolved: &[ResolvedCondition]) -> bool {
     if spec.preferred_script_type != PreferredScriptType::Auto {
+        return false;
+    }
+    // An unspendable primary's intent is "recovery-only" — folding it
+    // into a flat multisig would silently drop the primary slot and
+    // produce a different wallet shape than the user asked for. Skip
+    // the smart-combine entirely when one is present.
+    if resolved.iter().any(|c| c.is_unspendable) {
         return false;
     }
     let has_primary = resolved.iter().any(|c| c.is_primary);
@@ -188,7 +244,13 @@ fn combine_taproot_multisig(resolved: &[ResolvedCondition]) -> WalletShape {
     let mut threshold = 1usize;
 
     for cond in resolved {
-        match &cond.path {
+        // `can_combine_taproot_multisig` already rules out unspendable
+        // conditions; expect a real path here.
+        let path = cond
+            .path
+            .as_ref()
+            .expect("combine_taproot_multisig: unspendable conditions are filtered upstream");
+        match path {
             PolicyPath::Single(k) => all_keys.push(k.clone()),
             PolicyPath::Multi { keys, threshold: t } => {
                 all_keys.extend(keys.iter().cloned());
@@ -220,13 +282,19 @@ fn try_single_condition_shape(
     if !cond.is_primary || cond.timelock != 0 {
         return None;
     }
+    // A lone unspendable condition would have no key and no recovery to
+    // promote; validate() rejects that case, but guard here too.
+    if cond.is_unspendable {
+        return None;
+    }
 
     let kind = match spec.preferred_script_type {
         PreferredScriptType::Taproot => ScriptKind::Taproot,
         _ => ScriptKind::SegwitV0,
     };
 
-    match &cond.path {
+    let path = cond.path.as_ref()?;
+    match path {
         PolicyPath::Single(key) => Some(WalletShape::SingleSig {
             kind,
             key: key.clone(),
@@ -245,24 +313,61 @@ fn try_single_condition_shape(
 /// behavior). Recoveries with `timelock == 0` are assigned default timelocks
 /// of `144 * (idx + 1)` blocks (~1 day per slot) and the recovery list is
 /// sorted by effective timelock so it matches Liana's BTreeMap iteration order.
-fn build_timelocked_policy(resolved: Vec<ResolvedCondition>) -> Result<WalletShape, PolicyError> {
-    let mut primary: Option<(String, PolicyPath)> = None;
+///
+/// `network` is needed to construct the unspendable primary's Xpub when
+/// a condition is flagged `is_unspendable` — the chain code derives
+/// deterministically from the recovery key set, but the Xpub network
+/// byte must match the wallet.
+fn build_timelocked_policy(
+    resolved: Vec<ResolvedCondition>,
+    network: Network,
+) -> Result<WalletShape, PolicyError> {
+    let mut primary: Option<(String, Option<PolicyPath>, bool)> = None;
     let mut recoveries: Vec<RecoveryPath> = Vec::new();
 
     for cond in resolved {
         if cond.is_primary {
-            primary = Some((cond.id, cond.path));
+            primary = Some((cond.id, cond.path, cond.is_unspendable));
         } else {
+            // Non-primary conditions are never unspendable (validate()
+            // rejects that combination); their path is always Some.
+            let path = cond.path.ok_or_else(|| {
+                PolicyError::InvalidPolicy(format!(
+                    "non-primary condition '{}' is missing its resolved path",
+                    cond.id
+                ))
+            })?;
             recoveries.push(RecoveryPath {
                 id: cond.id,
                 timelock: cond.timelock,
-                path: cond.path,
+                path,
             });
         }
     }
 
     let (primary_id, primary_path) = match primary {
-        Some(p) => p,
+        Some((id, Some(path), false)) => (id, path),
+        Some((id, None, true)) => {
+            // Unspendable primary: substitute a NUMS-derived xpub
+            // computed from the recovery keys. Validate() guarantees
+            // recoveries.is_empty() == false here.
+            let xpub = build_unspendable_primary_xpub(&recoveries, network)?;
+            (id, PolicyPath::Single(xpub))
+        }
+        Some((id, _, true)) => {
+            // Shouldn't happen — resolve_condition leaves path = None
+            // for unspendable. Treat as a logic error.
+            return Err(PolicyError::InvalidPolicy(format!(
+                "unspendable primary condition '{}' unexpectedly carries a resolved path",
+                id
+            )));
+        }
+        Some((id, None, false)) => {
+            return Err(PolicyError::InvalidPolicy(format!(
+                "non-unspendable primary condition '{}' is missing its resolved path",
+                id
+            )));
+        }
         None => {
             if recoveries.is_empty() {
                 return Err(PolicyError::InvalidPolicy(
