@@ -183,8 +183,7 @@ mod tests {
     fn test_unspendable_primary_xpub_uses_nums_pubkey() {
         let recoveries = vec![KeyUtils::generate_complete_key_set(Network::Regtest).xpub];
         let xpub = unspendable_primary_xpub(&recoveries, Network::Regtest);
-        let nums_pk =
-            secp256k1::PublicKey::from_str(BIP341_NUMS_HEX).expect("valid NUMS hex");
+        let nums_pk = secp256k1::PublicKey::from_str(BIP341_NUMS_HEX).expect("valid NUMS hex");
         assert_eq!(xpub.public_key, nums_pk);
         assert_eq!(xpub.depth, 0);
         assert_eq!(u32::from(xpub.child_number), 0);
