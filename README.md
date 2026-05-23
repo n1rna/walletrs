@@ -1,4 +1,13 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sigvault-horizontal-dark.png">
+    <img alt="SigVault" src="docs/assets/sigvault-horizontal.png" width="360">
+  </picture>
+</p>
+
 # walletrs
+
+> A [SigVault](https://sigvault.org) project.
 
 A standalone Bitcoin wallet service speaking gRPC and HTTP/JSON — multisig, miniscript policies, taproot leaf-hash spends, PSBT lifecycle.
 
