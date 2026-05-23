@@ -87,7 +87,7 @@ mod tests {
     fn dummy_state() -> AgentState {
         AgentState {
             agent_id: "agt_test".to_string(),
-            endpoint: "https://sigvault.example".to_string(),
+            endpoint: "https://api.sigvault.org".to_string(),
             public_key: "AAAA".to_string(),
             private_key_encrypted: "BBBB".to_string(),
             paired_at: 0,
@@ -97,7 +97,7 @@ mod tests {
     fn config(token: Option<&str>, disabled: bool, repair: bool) -> AgentConfig {
         AgentConfig {
             token: token.map(str::to_string),
-            endpoint: "https://sigvault.example".to_string(),
+            endpoint: "https://api.sigvault.org".to_string(),
             disabled,
             repair,
         }
