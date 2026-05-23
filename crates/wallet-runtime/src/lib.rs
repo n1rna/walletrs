@@ -7,7 +7,8 @@
 //!   `bdk_wallet::WalletPersister`.
 //! - `signer`: PSBT signing utilities that accept key material as parameters
 //!   (no database lookups, no server context).
-//! - `policy_path`: Liana taproot leaf-hash → BDK policy-path resolver.
+//! - `policy_path`: taproot leaf-hash → BDK policy-path resolver for
+//!   timelocked policies.
 //! - `electrum`: thin wrapper around `BdkElectrumClient` for full scans and
 //!   broadcast.
 //! - `persister`: `InMemoryPersister`, a minimal `WalletPersister` impl useful

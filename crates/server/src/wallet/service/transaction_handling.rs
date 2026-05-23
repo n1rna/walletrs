@@ -25,11 +25,11 @@ use std::str::FromStr;
 use tonic::{Request, Response, Status};
 use wallet_runtime::ElectrumClient;
 
-/// Load the persisted Liana descriptor for a wallet. Returns `None` for
-/// non-Liana wallets (single-sig, plain multisig, taproot multisig with NUMS
+/// Load the persisted policy descriptor for a wallet. Returns `None` for
+/// flat wallets (single-sig, plain multisig, taproot multisig with NUMS
 /// internal key) and for wallets whose stored value is missing or unparseable.
-fn load_liana_descriptor(wallet_id: &str) -> Option<LianaDescriptor> {
-    db::get_liana_descriptor(wallet_id)
+fn load_policy_descriptor(wallet_id: &str) -> Option<LianaDescriptor> {
+    db::get_policy_descriptor(wallet_id)
         .ok()
         .flatten()
         .and_then(|s| LianaDescriptor::from_str(&s).ok())
@@ -210,11 +210,11 @@ pub async fn fund_wallet_transaction(
 
             let policy_path = if !req.selected_leaf_hash.is_empty() {
                 log::debug!("Selected leaf hash: {}", req.selected_leaf_hash);
-                let liana_desc = load_liana_descriptor(&req.wallet_id);
+                let policy_desc = load_policy_descriptor(&req.wallet_id);
                 resolve_policy_path_from_leaf(
                     &wallet,
                     &req.selected_leaf_hash,
-                    liana_desc.as_ref(),
+                    policy_desc.as_ref(),
                 )?
             } else {
                 log::debug!("No specific policy path selected - using default");
@@ -245,7 +245,7 @@ pub async fn fund_wallet_transaction(
                 tx_builder.do_not_spend_change();
             }
 
-            // For wallets with policies (Liana-style Taproot with timelocked recovery paths):
+            // For wallets with policies (timelocked Taproot with recovery paths):
             // Set policy path for both External and Internal keychains
             if has_policies && !policy_path.is_empty() {
                 log::debug!("Setting policy path on both keychains: {:?}", policy_path);
@@ -266,8 +266,8 @@ pub async fn fund_wallet_transaction(
                 }
             };
 
-            let pruned_psbt_str = match load_liana_descriptor(&req.wallet_id) {
-                Some(liana_desc) => match liana_desc.prune_bip32_derivs_last_avail(psbt.clone()) {
+            let pruned_psbt_str = match load_policy_descriptor(&req.wallet_id) {
+                Some(policy_desc) => match policy_desc.prune_bip32_derivs_last_avail(psbt.clone()) {
                     Ok(pruned) => {
                         log::info!(
                             "Successfully pruned PSBT BIP32 derivations for wallet {}",
@@ -282,7 +282,7 @@ pub async fn fund_wallet_transaction(
                 },
                 None => {
                     log::debug!(
-                        "No liana descriptor for wallet {}, skipping pruning",
+                        "No policy descriptor for wallet {}, skipping pruning",
                         req.wallet_id
                     );
                     String::new()

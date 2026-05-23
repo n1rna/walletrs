@@ -56,11 +56,11 @@ pub async fn create_generic_wallet(
     let result = advanced::build_wallet(&spec, &stored_wallet)
         .map_err(|e| Status::internal(format!("Wallet creation failed: {}", e)))?;
 
-    if let Some(ref liana_desc) = result.liana_descriptor {
-        log::info!("Persisting Liana descriptor for wallet {}", req.wallet_id);
-        let updated_wallet = stored_wallet.with_liana_descriptor(liana_desc);
+    if let Some(ref policy_desc) = result.policy_descriptor {
+        log::info!("Persisting policy descriptor for wallet {}", req.wallet_id);
+        let updated_wallet = stored_wallet.with_policy_descriptor(policy_desc);
         if let Err(e) = updated_wallet.store() {
-            log::warn!("Failed to persist liana descriptor: {}", e);
+            log::warn!("Failed to persist policy descriptor: {}", e);
         }
     }
 

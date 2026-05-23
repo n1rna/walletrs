@@ -59,9 +59,12 @@ pub async fn create_system_managed_key(
     let _tprv_formatted = KeyUtils::format_key_with_fingerprint(&fingerprint, &tprv.to_string());
     let _tpub_formatted = KeyUtils::format_key_with_fingerprint(&fingerprint, &tpub.to_string());
 
-    // Format xpub for Liana (with multipath derivation and full key origin)
-    let tpub_liana_format =
-        KeyUtils::format_key_for_liana(&fingerprint, &primary_path.to_string(), &tpub.to_string());
+    // Format xpub for descriptor use (with multipath derivation and full key origin)
+    let tpub_descriptor_format = KeyUtils::format_key_for_descriptor(
+        &fingerprint,
+        &primary_path.to_string(),
+        &tpub.to_string(),
+    );
 
     // Store the system key with proper separation of root and account keys
     // xpriv/xpub: Root keys (m/) - for potential future derivations
@@ -76,12 +79,12 @@ pub async fn create_system_managed_key(
         &primary_path.to_string(),
         &key_result.words.join(" "),
         &tprv.to_string(),  // Store account xpriv (m/84'/1'/0')
-        &tpub_liana_format, // Store Liana-formatted account xpub
+        &tpub_descriptor_format, // Store descriptor-formatted account xpub
     ) {
         Ok(_) => Ok(Response::new(CreateSystemManagedKeysResponse {
             user_id: req.user_id,
             device_id: req.device_id,
-            xpub: tpub_liana_format.clone(), // Return the Liana-formatted xpub
+            xpub: tpub_descriptor_format.clone(), // Return the descriptor-formatted xpub
             fingerprint: fingerprint,
             derivation_path: primary_path.to_string(),
             status: "success".to_string(),
@@ -156,7 +159,7 @@ pub async fn get_managed_key(
                 device_id: key.device_id,
                 key_name: key.key_name,
                 key_type: key.key_type,
-                xpub: key.tpub.clone().unwrap_or(key.xpub), // For system keys, use tpub (Liana-formatted); for customer keys, use xpub
+                xpub: key.tpub.clone().unwrap_or(key.xpub), // For system keys, use tpub (descriptor-formatted); for customer keys, use xpub
                 fingerprint: key.fingerprint,
                 derivation_path: key.derivation_path,
                 created_at: key.created_at,
@@ -200,7 +203,7 @@ pub async fn list_managed_keys(
                     device_id: key.device_id,
                     key_name: key.key_name,
                     key_type: key.key_type,
-                    xpub: key.tpub.clone().unwrap_or(key.xpub), // For system keys, use tpub (Liana-formatted); for customer keys, use xpub
+                    xpub: key.tpub.clone().unwrap_or(key.xpub), // For system keys, use tpub (descriptor-formatted); for customer keys, use xpub
                     fingerprint: key.fingerprint,
                     derivation_path: key.derivation_path,
                     created_at: key.created_at,

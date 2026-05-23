@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 license = "BSD-3-Clause"
-description = "BDK 1.x wallet runtime — generic over any WalletPersister, with PSBT signing, Liana leaf-path resolution, and an Electrum client wrapper. No service or DB dependencies."
+description = "BDK 1.x wallet runtime — generic over any WalletPersister, with PSBT signing, timelocked-policy leaf-path resolution, and an Electrum client wrapper. No service or DB dependencies."
 
 [dependencies]
 policy-core = { path = "../policy-core" }

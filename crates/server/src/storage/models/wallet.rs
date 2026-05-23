@@ -12,7 +12,7 @@ pub struct StoredWallet {
     pub description: Option<String>,
     pub network: String,     // "mainnet", "testnet", "regtest"
     pub wallet_type: String, // "single", "multisig", "advanced", etc.
-    pub liana_descriptor: Option<String>,
+    pub policy_descriptor: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     pub is_active: bool,
@@ -34,7 +34,7 @@ impl Default for StoredWallet {
             description: None,
             network: "testnet".to_string(),
             wallet_type: "single".to_string(),
-            liana_descriptor: None,
+            policy_descriptor: None,
             created_at: now,
             updated_at: now,
             is_active: true,
@@ -63,7 +63,7 @@ impl StoredWallet {
             description: None,
             network: network.to_string(),
             wallet_type: wallet_type.to_string(),
-            liana_descriptor: None,
+            policy_descriptor: None,
             created_at: now,
             updated_at: now,
             is_active: true,
@@ -80,8 +80,8 @@ impl StoredWallet {
         self
     }
 
-    pub fn with_liana_descriptor(mut self, desc: &str) -> Self {
-        self.liana_descriptor = Some(desc.to_string());
+    pub fn with_policy_descriptor(mut self, desc: &str) -> Self {
+        self.policy_descriptor = Some(desc.to_string());
         self
     }
 
@@ -308,10 +308,10 @@ impl Storable for StoredWallet {
             "Type of wallet (single, multisig, advanced)",
         ))
         .add_field(FieldSchema::new(
-            "liana_descriptor",
+            "policy_descriptor",
             FieldType::Optional(Box::new(FieldType::String)),
             false,
-            "Optional Liana multipath descriptor for PSBT pruning",
+            "Optional canonical multipath policy descriptor for PSBT pruning",
         ))
         .add_field(FieldSchema::new(
             "created_at",
@@ -422,10 +422,10 @@ impl Storable for StoredWallet {
             );
         }
 
-        if let Some(liana_descriptor) = &self.liana_descriptor {
+        if let Some(policy_descriptor) = &self.policy_descriptor {
             fields.insert(
-                "liana_descriptor".to_string(),
-                serde_json::Value::String(liana_descriptor.clone()),
+                "policy_descriptor".to_string(),
+                serde_json::Value::String(policy_descriptor.clone()),
             );
         }
 

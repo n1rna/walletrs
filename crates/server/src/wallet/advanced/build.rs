@@ -11,11 +11,12 @@ pub struct WalletBuildResult {
     pub wallet_id: String,
     pub external_descriptor: String,
     pub internal_descriptor: String,
-    /// Canonical Liana descriptor for `TimelockedPolicy` wallets. `None` for
-    /// flat single-sig / multisig / taproot-multisig wallets — those have no
-    /// Liana descriptor to persist, and downstream code (PSBT pruning, leaf
-    /// resolution in the signer) treats `None` as "skip Liana steps".
-    pub liana_descriptor: Option<String>,
+    /// Canonical multipath policy descriptor for `TimelockedPolicy` wallets.
+    /// `None` for flat single-sig / multisig / taproot-multisig wallets —
+    /// those have no policy descriptor to persist, and downstream code
+    /// (PSBT pruning, leaf resolution in the signer) treats `None` as
+    /// "skip policy-descriptor steps".
+    pub policy_descriptor: Option<String>,
     pub taproot_leaf_info: Vec<TaprootLeafInfo>,
     pub merkle_root: Option<String>,
     pub internal_key: Option<String>,
@@ -37,7 +38,7 @@ pub fn build_wallet(
     let DescriptorPair {
         external,
         internal,
-        liana,
+        policy_descriptor,
     } = descriptor::build(&shape)?;
 
     log::info!(
@@ -52,7 +53,7 @@ pub fn build_wallet(
         &internal,
     )?;
 
-    let metadata = match (&shape, liana.as_ref()) {
+    let metadata = match (&shape, policy_descriptor.as_ref()) {
         (
             WalletShape::TimelockedPolicy {
                 primary_id,
@@ -68,7 +69,7 @@ pub fn build_wallet(
         wallet_id: stored_wallet.wallet_id.clone(),
         external_descriptor: external,
         internal_descriptor: internal,
-        liana_descriptor: liana.map(|d| d.to_string()),
+        policy_descriptor: policy_descriptor.map(|d| d.to_string()),
         taproot_leaf_info: metadata.leaves,
         merkle_root: metadata.merkle_root,
         internal_key: metadata.internal_key,

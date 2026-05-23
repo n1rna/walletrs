@@ -1,7 +1,7 @@
 //! Spending-path enumeration for arbitrary descriptors.
 //!
 //! Given a descriptor string, classify it into one of the known shapes
-//! (single-sig, multisig, Liana timelocked, taproot multi-leaf) and emit
+//! (single-sig, multisig, timelocked-policy, taproot multi-leaf) and emit
 //! a flat list of `SpendingPath`s the caller can present to a user. Each
 //! path carries the metadata needed to (a) label it in the UI, (b) build
 //! a PSBT that targets it (`policy_path` for `TxBuilder::policy_path`),
@@ -19,8 +19,9 @@ use liana::descriptors::LianaDescriptor;
 use crate::error::WalletRuntimeError;
 
 /// One spending option for the user. Single-sig and multisig
-/// descriptors emit a single path; Liana descriptors emit one path per
-/// branch (primary + each recovery, ordered by ascending timelock).
+/// descriptors emit a single path; timelocked-policy descriptors emit
+/// one path per branch (primary + each recovery, ordered by ascending
+/// timelock).
 #[derive(Debug, Clone)]
 pub struct SpendingPath {
     /// Stable identifier; safe to use as a dictionary key in storage or
@@ -30,17 +31,17 @@ pub struct SpendingPath {
     /// is the canonical text used by both the path picker and the
     /// signing-progress UI.
     pub label: String,
-    /// Optional longer description. Currently used for Liana recovery
-    /// paths to explain timelock semantics.
+    /// Optional longer description. Currently used for timelocked
+    /// recovery paths to explain timelock semantics.
     pub description: Option<String>,
     /// Threshold (M) for this path. `1` for single-sig, `M` for
-    /// `M-of-N`, the path's threshold for Liana branches.
+    /// `M-of-N`, the path's threshold for timelocked-policy branches.
     pub threshold: u32,
     /// All fingerprints that can contribute a signature to this path.
     /// `(threshold, fingerprints.len())` is the M / N for the UI.
     pub fingerprints: Vec<String>,
-    /// Relative-time CSV value in blocks for Liana recoveries; `None`
-    /// for primary / single-sig / multisig paths.
+    /// Relative-time CSV value in blocks for timelocked recoveries;
+    /// `None` for primary / single-sig / multisig paths.
     pub timelock_blocks: Option<u32>,
     /// BDK policy-path map — what `TxBuilder::policy_path` consumes when
     /// building a PSBT that targets this branch. `None` for descriptors
@@ -50,16 +51,17 @@ pub struct SpendingPath {
 }
 
 /// Classify the descriptor and emit one `SpendingPath` per spendable
-/// branch. Pass `policies` from the wallet (for non-Liana descriptors
-/// only the policy id is read — the value comes from
-/// `wallet.policies(KeychainKind::External)`); for Liana descriptors,
-/// pass `external_policy_id` so we can populate `policy_path`.
+/// branch. Pass `policies` from the wallet (for flat descriptors only
+/// the policy id is read — the value comes from
+/// `wallet.policies(KeychainKind::External)`); for timelocked-policy
+/// descriptors, pass `external_policy_id` so we can populate
+/// `policy_path`.
 ///
-/// `policy_type` is the wallet manager's stored policy_type string, used
-/// to pick the right classification path. For descriptor-only wallets
-/// (where the wallet manager doesn't know the shape up front), pass
-/// `"descriptor"` and we'll attempt to parse it as Liana first, falling
-/// back to a single "Default" path.
+/// `policy_type` is the wallet manager's stored policy_type string,
+/// used to pick the right classification path. For descriptor-only
+/// wallets (where the wallet manager doesn't know the shape up front),
+/// pass `"descriptor"` and we'll attempt to parse it as a multipath
+/// policy descriptor first, falling back to a single "Default" path.
 pub fn list_spending_paths(
     policy_type: &str,
     external_descriptor: &str,
@@ -95,13 +97,14 @@ pub fn list_spending_paths(
             }])
         }
 
-        "liana" | "descriptor" => {
-            // Try Liana parsing first; if it succeeds, enumerate
-            // primary + recoveries. Otherwise fall back to a single
-            // default path (descriptor-only wallets that aren't Liana —
-            // bare wpkh, multisig the manager didn't tag, etc.).
+        "timelocked" | "descriptor" => {
+            // Try multipath-policy parsing first; if it succeeds,
+            // enumerate primary + recoveries. Otherwise fall back to a
+            // single default path (descriptor-only wallets that aren't
+            // timelocked — bare wpkh, multisig the manager didn't tag,
+            // etc.).
             match LianaDescriptor::from_str(external_descriptor) {
-                Ok(desc) => liana_paths(&desc, external_policy_id),
+                Ok(desc) => timelocked_paths(&desc, external_policy_id),
                 Err(_) if policy_type == "descriptor" => Ok(vec![SpendingPath {
                     id: "default".to_string(),
                     label: "Default".to_string(),
@@ -112,7 +115,7 @@ pub fn list_spending_paths(
                     policy_path: None,
                 }]),
                 Err(e) => Err(WalletRuntimeError::PolicyPath(format!(
-                    "expected Liana descriptor for policy_type=liana but parse failed: {}",
+                    "expected policy descriptor for policy_type=timelocked but parse failed: {}",
                     e
                 ))),
             }
@@ -131,7 +134,7 @@ pub fn list_spending_paths(
     }
 }
 
-fn liana_paths(
+fn timelocked_paths(
     desc: &LianaDescriptor,
     external_policy_id: Option<&str>,
 ) -> Result<Vec<SpendingPath>, WalletRuntimeError> {

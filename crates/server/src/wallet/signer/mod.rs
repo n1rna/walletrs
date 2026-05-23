@@ -163,18 +163,18 @@ pub fn sign_psbt_with_taproot_support(
 /// - `"keypath"` — the primary spends via the taproot internal key.
 /// - A hex-encoded `TapLeafHash` — primary or recovery via a script leaf.
 ///
-/// The Liana descriptor is required for hex leaf hashes so we can derive
+/// The policy descriptor is required for hex leaf hashes so we can derive
 /// the child-zero PSBT input and match leaf hashes against signer
 /// fingerprints.
 pub fn resolve_policy_path_from_leaf(
     wallet: &bdk_wallet::Wallet,
     leaf_hash: &str,
-    liana_descriptor: Option<&LianaDescriptor>,
+    policy_descriptor: Option<&LianaDescriptor>,
 ) -> Result<BTreeMap<String, Vec<usize>>, Status> {
-    wr_resolve_path(wallet, leaf_hash, liana_descriptor).map_err(|e| match e.to_string() {
+    wr_resolve_path(wallet, leaf_hash, policy_descriptor).map_err(|e| match e.to_string() {
         ref s
             if s.contains("does not match any spending path")
-                || s.contains("provided but wallet has no Liana descriptor") =>
+                || s.contains("provided but wallet has no policy descriptor") =>
         {
             Status::invalid_argument(s.clone())
         }
@@ -204,13 +204,13 @@ mod tests {
         let xpriv = Xpriv::new_master(Network::Testnet, &bytes).unwrap();
         let xpub = Xpub::from_priv(&secp, &xpriv);
         let fp = format!("{:08x}", xpriv.fingerprint(&secp));
-        let liana_xpub = format!("[{}]{}/<0;1>/*", fp, xpub);
+        let multipath_xpub = format!("[{}]{}/<0;1>/*", fp, xpub);
         (
             format!("d{}", seed),
             ManagedKey {
                 fingerprint: fp,
                 derivation_path: "m/84'/1'/0'".to_string(),
-                xpub: liana_xpub,
+                xpub: multipath_xpub,
                 tpub: None,
             },
         )
@@ -267,21 +267,24 @@ mod tests {
         };
 
         let pair = descriptor::build(&shape).unwrap();
-        let liana_desc = pair.liana.clone().expect("liana descriptor");
+        let policy_desc = pair
+            .policy_descriptor
+            .clone()
+            .expect("policy descriptor");
 
-        let metadata = taproot::extract(&primary_id, &primary, &recoveries, &liana_desc).unwrap();
+        let metadata = taproot::extract(&primary_id, &primary, &recoveries, &policy_desc).unwrap();
 
         let wallet = Wallet::create(pair.external.clone(), pair.internal.clone())
             .network(Network::Testnet)
             .create_wallet_no_persist()
             .expect("BDK wallet");
 
-        (wallet, liana_desc, metadata.leaves)
+        (wallet, policy_desc, metadata.leaves)
     }
 
     #[test]
     fn primary_multisig_leaf_resolves_to_zero() {
-        let (wallet, liana_desc, leaves) = build_timelocked_wallet();
+        let (wallet, policy_desc, leaves) = build_timelocked_wallet();
         let primary = leaves
             .iter()
             .find(|l| l.spending_condition_id == "primary")
@@ -297,7 +300,7 @@ mod tests {
         );
 
         let resolved =
-            resolve_policy_path_from_leaf(&wallet, &primary.leaf_hash, Some(&liana_desc))
+            resolve_policy_path_from_leaf(&wallet, &primary.leaf_hash, Some(&policy_desc))
                 .expect("resolve primary leaf");
         let path = resolved.values().next().expect("policy path entry");
         assert_eq!(path, &vec![0]);
@@ -305,14 +308,14 @@ mod tests {
 
     #[test]
     fn recovery_leaf_resolves_to_one() {
-        let (wallet, liana_desc, leaves) = build_timelocked_wallet();
+        let (wallet, policy_desc, leaves) = build_timelocked_wallet();
         let recovery = leaves
             .iter()
             .find(|l| l.spending_condition_id == "recovery")
             .expect("recovery leaf");
 
         let resolved =
-            resolve_policy_path_from_leaf(&wallet, &recovery.leaf_hash, Some(&liana_desc))
+            resolve_policy_path_from_leaf(&wallet, &recovery.leaf_hash, Some(&policy_desc))
                 .expect("resolve recovery leaf");
         let path = resolved.values().next().expect("policy path entry");
         assert_eq!(path, &vec![1]);
@@ -320,8 +323,8 @@ mod tests {
 
     #[test]
     fn unknown_leaf_returns_invalid_argument() {
-        let (wallet, liana_desc, _) = build_timelocked_wallet();
-        let result = resolve_policy_path_from_leaf(&wallet, "deadbeef", Some(&liana_desc));
+        let (wallet, policy_desc, _) = build_timelocked_wallet();
+        let result = resolve_policy_path_from_leaf(&wallet, "deadbeef", Some(&policy_desc));
         assert!(result.is_err());
     }
 
