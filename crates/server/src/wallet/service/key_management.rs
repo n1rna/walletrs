@@ -78,7 +78,7 @@ pub async fn create_system_managed_key(
         &fingerprint,
         &primary_path.to_string(),
         &key_result.words.join(" "),
-        &tprv.to_string(),  // Store account xpriv (m/84'/1'/0')
+        &tprv.to_string(),       // Store account xpriv (m/84'/1'/0')
         &tpub_descriptor_format, // Store descriptor-formatted account xpub
     ) {
         Ok(_) => Ok(Response::new(CreateSystemManagedKeysResponse {

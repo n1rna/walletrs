@@ -267,19 +267,21 @@ pub async fn fund_wallet_transaction(
             };
 
             let pruned_psbt_str = match load_policy_descriptor(&req.wallet_id) {
-                Some(policy_desc) => match policy_desc.prune_bip32_derivs_last_avail(psbt.clone()) {
-                    Ok(pruned) => {
-                        log::info!(
-                            "Successfully pruned PSBT BIP32 derivations for wallet {}",
-                            req.wallet_id
-                        );
-                        pruned.to_string()
+                Some(policy_desc) => {
+                    match policy_desc.prune_bip32_derivs_last_avail(psbt.clone()) {
+                        Ok(pruned) => {
+                            log::info!(
+                                "Successfully pruned PSBT BIP32 derivations for wallet {}",
+                                req.wallet_id
+                            );
+                            pruned.to_string()
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to prune PSBT: {}, falling back to full PSBT", e);
+                            String::new()
+                        }
                     }
-                    Err(e) => {
-                        log::warn!("Failed to prune PSBT: {}, falling back to full PSBT", e);
-                        String::new()
-                    }
-                },
+                }
                 None => {
                     log::debug!(
                         "No policy descriptor for wallet {}, skipping pruning",

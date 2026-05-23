@@ -267,10 +267,7 @@ mod tests {
         };
 
         let pair = descriptor::build(&shape).unwrap();
-        let policy_desc = pair
-            .policy_descriptor
-            .clone()
-            .expect("policy descriptor");
+        let policy_desc = pair.policy_descriptor.clone().expect("policy descriptor");
 
         let metadata = taproot::extract(&primary_id, &primary, &recoveries, &policy_desc).unwrap();
 

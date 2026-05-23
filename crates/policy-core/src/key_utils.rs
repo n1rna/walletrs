@@ -106,7 +106,11 @@ impl KeyUtils {
         format!("[{}]{}", fingerprint, key)
     }
 
-    pub fn format_key_for_descriptor(fingerprint: &str, derivation_path: &str, key: &str) -> String {
+    pub fn format_key_for_descriptor(
+        fingerprint: &str,
+        derivation_path: &str,
+        key: &str,
+    ) -> String {
         let path = derivation_path
             .strip_prefix("m/")
             .or_else(|| derivation_path.strip_prefix("m"))
