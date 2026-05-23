@@ -70,7 +70,7 @@ mod tests {
     fn round_trip_serde() {
         let s = AgentState {
             agent_id: "agt_abc".into(),
-            endpoint: "https://sigvault.example".into(),
+            endpoint: "https://api.sigvault.org".into(),
             public_key: "AAAA".into(),
             private_key_encrypted: "BBBB".into(),
             paired_at: 1714058400,
