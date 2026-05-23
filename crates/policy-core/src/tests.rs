@@ -33,14 +33,14 @@ fn make_key(device_id: &str, seed: u64) -> Fixture {
     let xpriv = Xpriv::new_master(Network::Testnet, &seed_bytes).expect("valid seed");
     let xpub = Xpub::from_priv(&secp, &xpriv);
     let fingerprint = format!("{:08x}", xpriv.fingerprint(&secp));
-    let liana_format_xpub = format!("[{}]{}/<0;1>/*", fingerprint, xpub);
+    let multipath_xpub = format!("[{}]{}/<0;1>/*", fingerprint, xpub);
 
     Fixture {
         device_id: device_id.to_string(),
         key: ManagedKey {
             fingerprint,
             derivation_path: "m/84'/1'/0'".to_string(),
-            xpub: liana_format_xpub,
+            xpub: multipath_xpub,
             tpub: None,
         },
     }
@@ -298,7 +298,7 @@ fn rejects_segwit_v0_for_timelocked_policy() {
 }
 
 #[test]
-fn descriptor_pair_for_single_sig_has_no_liana() {
+fn descriptor_pair_for_single_sig_has_no_policy_descriptor() {
     let f = make_key("device-1", 1);
     let spec = WalletSpec {
         network: Network::Testnet,
@@ -318,13 +318,13 @@ fn descriptor_pair_for_single_sig_has_no_liana() {
     assert!(pair.external.starts_with("wpkh("));
     assert!(pair.internal.starts_with("wpkh("));
     assert!(
-        pair.liana.is_none(),
-        "non-Liana shape must not produce a Liana descriptor"
+        pair.policy_descriptor.is_none(),
+        "flat shape must not produce a policy descriptor"
     );
 }
 
 #[test]
-fn descriptor_pair_for_multisig_has_no_liana() {
+fn descriptor_pair_for_multisig_has_no_policy_descriptor() {
     let f1 = make_key("device-1", 1);
     let f2 = make_key("device-2", 2);
     let spec = WalletSpec {
@@ -343,11 +343,11 @@ fn descriptor_pair_for_multisig_has_no_liana() {
     let shape = shape::classify(&spec).unwrap();
     let pair = descriptor::build(&shape).unwrap();
     assert!(pair.external.starts_with("wsh(sortedmulti(2,"));
-    assert!(pair.liana.is_none());
+    assert!(pair.policy_descriptor.is_none());
 }
 
 #[test]
-fn descriptor_pair_for_timelocked_policy_populates_liana() {
+fn descriptor_pair_for_timelocked_policy_populates_policy_descriptor() {
     let f1 = make_key("device-1", 1);
     let f2 = make_key("device-2", 2);
     let spec = WalletSpec {
@@ -362,7 +362,7 @@ fn descriptor_pair_for_timelocked_policy_populates_liana() {
     let shape = shape::classify(&spec).unwrap();
     let pair = descriptor::build(&shape).unwrap();
     assert!(
-        pair.liana.is_some(),
-        "TimelockedPolicy shape must produce a Liana descriptor"
+        pair.policy_descriptor.is_some(),
+        "TimelockedPolicy shape must produce a policy descriptor"
     );
 }

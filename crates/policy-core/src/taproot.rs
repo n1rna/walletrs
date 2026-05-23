@@ -1,4 +1,4 @@
-//! Taproot leaf-hash extraction for Liana-policy wallets.
+//! Taproot leaf-hash extraction for timelocked-policy wallets.
 //!
 //! Takes a built `LianaDescriptor` plus the structured shape inputs and
 //! returns the leaf-hash, internal-key and merkle-root metadata that clients

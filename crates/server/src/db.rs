@@ -58,9 +58,9 @@ pub fn get_wallet(wallet_id: &str) -> Result<StoredWallet, std::io::Error> {
         .map_err(convert_storage_error)
 }
 
-pub fn get_liana_descriptor(wallet_id: &str) -> Result<Option<String>, std::io::Error> {
+pub fn get_policy_descriptor(wallet_id: &str) -> Result<Option<String>, std::io::Error> {
     let wallet = get_wallet(wallet_id)?;
-    Ok(wallet.liana_descriptor)
+    Ok(wallet.policy_descriptor)
 }
 
 pub fn wallet_exists(user_id: &str, wallet_id: &str) -> Result<bool, std::io::Error> {

@@ -1,4 +1,4 @@
-//! Liana taproot leaf-hash → BDK policy-path resolver.
+//! Taproot leaf-hash → BDK policy-path resolver for timelocked policies.
 //!
 //! Lifted (with surface-level error-type changes) from
 //! `walletrs/crates/server/src/wallet/signer/mod.rs`.
@@ -7,16 +7,16 @@
 //! - `"keypath"` — the primary spends via the taproot internal key. Resolves
 //!   to `vec![0]` regardless of the descriptor structure.
 //! - A hex-encoded `TapLeafHash` — the primary or one of the recoveries
-//!   spends via a script leaf in the taptree. Requires a `LianaDescriptor` so
-//!   we can derive the child-zero PSBT input, populate `tap_key_origins` via
-//!   `update_psbt_in`, and match the leaf hash against each path's signer
-//!   fingerprints.
+//!   spends via a script leaf in the taptree. Requires a `LianaDescriptor`
+//!   (the multipath policy descriptor) so we can derive the child-zero
+//!   PSBT input, populate `tap_key_origins` via `update_psbt_in`, and
+//!   match the leaf hash against each path's signer fingerprints.
 //!
 //! Returns the `policy_path` map BDK's `TxBuilder::policy_path` consumes.
 //! BDK orders policy children as `[primary, recovery_1, recovery_2, …]` —
-//! matching Liana's `BTreeMap<u16, _>` recovery iteration order (ascending
-//! timelock) — so the primary's leaf hash always resolves to `vec![0]` and
-//! the Nth recovery to `vec![N]`.
+//! matching the upstream `LianaPolicy`'s `BTreeMap<u16, _>` recovery
+//! iteration order (ascending timelock) — so the primary's leaf hash
+//! always resolves to `vec![0]` and the Nth recovery to `vec![N]`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -32,7 +32,7 @@ use crate::error::WalletRuntimeError;
 pub fn resolve_policy_path_from_leaf(
     wallet: &bdk_wallet::Wallet,
     leaf_hash: &str,
-    liana_descriptor: Option<&LianaDescriptor>,
+    policy_descriptor: Option<&LianaDescriptor>,
 ) -> Result<BTreeMap<String, Vec<usize>>, WalletRuntimeError> {
     let external_policy = wallet
         .policies(KeychainKind::External)
@@ -47,23 +47,23 @@ pub fn resolve_policy_path_from_leaf(
         return Ok(policy_path);
     }
 
-    let descriptor = liana_descriptor.ok_or_else(|| {
+    let descriptor = policy_descriptor.ok_or_else(|| {
         WalletRuntimeError::PolicyPath(format!(
-            "leaf hash '{}' provided but wallet has no Liana descriptor",
+            "leaf hash '{}' provided but wallet has no policy descriptor",
             leaf_hash
         ))
     })?;
 
     let fp_to_leaves = build_fingerprint_leaf_map(descriptor)?;
-    let liana_policy = descriptor.policy();
+    let policy = descriptor.policy();
 
-    if path_owns_leaf(liana_policy.primary_path(), leaf_hash, &fp_to_leaves) {
+    if path_owns_leaf(policy.primary_path(), leaf_hash, &fp_to_leaves) {
         validate_policy_path(&external_policy, &[0])?;
         policy_path.insert(external_policy.id.clone(), vec![0]);
         return Ok(policy_path);
     }
 
-    for (recovery_idx, (_timelock, path_info)) in liana_policy.recovery_paths().iter().enumerate() {
+    for (recovery_idx, (_timelock, path_info)) in policy.recovery_paths().iter().enumerate() {
         if path_owns_leaf(path_info, leaf_hash, &fp_to_leaves) {
             let policy_child_index = recovery_idx + 1;
             validate_policy_path(&external_policy, &[policy_child_index])?;

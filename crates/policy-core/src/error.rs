@@ -8,6 +8,6 @@ pub enum PolicyError {
     KeyManagement(String),
     #[error("Descriptor generation error: {0}")]
     DescriptorGeneration(String),
-    #[error("Liana integration error: {0}")]
-    LianaIntegration(String),
+    #[error("Policy integration error: {0}")]
+    PolicyIntegration(String),
 }

@@ -7,14 +7,15 @@ use crate::error::PolicyError;
 use crate::shape::{PolicyPath, RecoveryPath, ScriptKind, WalletShape};
 
 /// Output of descriptor construction. `external` is the receive descriptor,
-/// `internal` is the change descriptor. `liana` is populated only for the
-/// `TimelockedPolicy` shape so callers can persist the canonical Liana
-/// descriptor for later PSBT pruning and leaf-hash resolution.
+/// `internal` is the change descriptor. `policy_descriptor` is populated
+/// only for the `TimelockedPolicy` shape so callers can persist the
+/// canonical multipath descriptor for later PSBT pruning and leaf-hash
+/// resolution.
 #[derive(Debug, Clone)]
 pub struct DescriptorPair {
     pub external: String,
     pub internal: String,
-    pub liana: Option<LianaDescriptor>,
+    pub policy_descriptor: Option<LianaDescriptor>,
 }
 
 /// NUMS point (BIP-341): provably-unspendable internal key used as the
@@ -91,13 +92,13 @@ fn timelocked_policy(
         .collect();
 
     let policy = LianaPolicy::new(primary_path, recovery_paths)
-        .map_err(|e| PolicyError::LianaIntegration(e.to_string()))?;
+        .map_err(|e| PolicyError::PolicyIntegration(e.to_string()))?;
     let descriptor = LianaDescriptor::new(policy);
 
     Ok(DescriptorPair {
         external: descriptor.receive_descriptor().to_string(),
         internal: descriptor.change_descriptor().to_string(),
-        liana: Some(descriptor),
+        policy_descriptor: Some(descriptor),
     })
 }
 
@@ -130,7 +131,7 @@ where
     DescriptorPair {
         external: wrap(&receive_keys.join(",")),
         internal: wrap(&change_keys.join(",")),
-        liana: None,
+        policy_descriptor: None,
     }
 }
 

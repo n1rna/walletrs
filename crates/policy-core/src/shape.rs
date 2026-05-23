@@ -52,7 +52,7 @@ pub enum WalletShape {
         threshold: usize,
         keys: Vec<DescriptorPublicKey>,
     },
-    /// Liana-style policy with a primary spending path and zero-or-more
+    /// Timelocked policy with a primary spending path and zero-or-more
     /// time-locked recovery paths. Always taproot (P2WSH variant unsupported
     /// here; SegwitV0 callers are rejected at classify time).
     TimelockedPolicy {
@@ -68,12 +68,13 @@ pub enum WalletShape {
 /// 1. Smart-combine: when `Auto` is requested and every condition has
 ///    `timelock == 0`, fold all keys (primary + recoveries) into one taproot
 ///    multisig using the primary's threshold. This matches clients that model
-///    multisigs as multiple zero-timelock conditions; Liana would reject the
-///    raw shape anyway because recovery paths need a non-zero timelock.
+///    multisigs as multiple zero-timelock conditions; the timelocked
+///    builder would reject the raw shape anyway because recovery paths
+///    need a non-zero timelock.
 /// 2. Single-condition fast path: one primary, zero timelock → either a single
 ///    sig wallet or a flat multisig in the requested script kind.
-/// 3. Otherwise: a Liana taproot policy. P2WSH (SegwitV0) is not supported for
-///    timelocked policies in this build.
+/// 3. Otherwise: a timelocked taproot policy. P2WSH (SegwitV0) is not supported
+///    for timelocked policies in this build.
 pub fn classify(spec: &WalletSpec) -> Result<WalletShape, PolicyError> {
     let resolved = resolve_conditions(spec)?;
 
@@ -191,11 +192,12 @@ fn ensure_key_origin_has_path(xpub: &str, fingerprint: &str, derivation_path: &s
     format!("{}{}", replacement, &xpub[fingerprint_only.len()..])
 }
 
-/// Compute the deterministic NUMS-derived xpub Liana uses for
-/// unspendable primary paths, sourcing the chain-code material from
-/// every resolved recovery key. Returns a `DescriptorPublicKey` formatted
-/// as a Liana key expression at fingerprint `00000000` so it slots into
-/// `PolicyPath::Single` like any other key.
+/// Compute the deterministic NUMS-derived xpub used for unspendable
+/// primary paths (matches Liana Desktop's construction so descriptors
+/// stay interoperable), sourcing the chain-code material from every
+/// resolved recovery key. Returns a `DescriptorPublicKey` formatted
+/// as a descriptor key expression at fingerprint `00000000` so it
+/// slots into `PolicyPath::Single` like any other key.
 fn build_unspendable_primary_xpub(
     recoveries: &[RecoveryPath],
     network: Network,
@@ -216,7 +218,7 @@ fn build_unspendable_primary_xpub(
         }
     }
     let xpub = unspendable_primary_xpub(&xpubs, network);
-    let formatted = KeyUtils::format_key_for_liana("00000000", "", &xpub.to_string());
+    let formatted = KeyUtils::format_key_for_descriptor("00000000", "", &xpub.to_string());
     DescriptorPublicKey::from_str(&formatted).map_err(|e| {
         PolicyError::InvalidPolicy(format!("unspendable primary descriptor key: {}", e))
     })
@@ -308,11 +310,12 @@ fn try_single_condition_shape(
     }
 }
 
-/// Build a timelocked policy shape. If no condition is marked primary, the
-/// first recovery is promoted to primary (matching original Liana adapter
-/// behavior). Recoveries with `timelock == 0` are assigned default timelocks
-/// of `144 * (idx + 1)` blocks (~1 day per slot) and the recovery list is
-/// sorted by effective timelock so it matches Liana's BTreeMap iteration order.
+/// Build a timelocked policy shape. If no condition is marked primary,
+/// the first recovery is promoted to primary. Recoveries with
+/// `timelock == 0` are assigned default timelocks of `144 * (idx + 1)`
+/// blocks (~1 day per slot) and the recovery list is sorted by effective
+/// timelock so it matches the upstream `LianaPolicy` BTreeMap iteration
+/// order.
 ///
 /// `network` is needed to construct the unspendable primary's Xpub when
 /// a condition is flagged `is_unspendable` — the chain code derives
