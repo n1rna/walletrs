@@ -765,10 +765,11 @@ pub async fn broadcast_wallet_transaction(
     match bdk_manager.load_wallet(&req.wallet_id) {
         Ok(wallet_result) => {
             let mut _db = wallet_result.store;
-            let client = ElectrumClient::connect(CONFIG.electrs_url())
-                .map_err(|e| Status::internal(format!("Failed to connect to electrs: {}", e)))?;
 
-            // Get the finalized PSBT (must have been finalized via finalize_wallet_transaction)
+            // Check preconditions (PSBT exists, parses, extracts to a tx)
+            // *before* paying the cost of an electrs connection. Lets the
+            // caller see a useful FailedPrecondition without first being
+            // confused by an Internal "can't reach electrs" error.
             let psbt_str = db::get_finalized_psbt(&req.wallet_id, &req.txid).map_err(|e| {
                 Status::failed_precondition(format!(
                     "No finalized PSBT found for wallet {} and txid {}. \
@@ -783,8 +784,7 @@ pub async fn broadcast_wallet_transaction(
                 &psbt_str[..100.min(psbt_str.len())]
             );
 
-            let psbt = Psbt::from_str(&psbt_str)
-                .map_err(|e| Status::invalid_argument(format!("Invalid PSBT format: {}", e)))?;
+            let psbt = parse_stored_psbt(&req.wallet_id, &req.txid, &psbt_str)?;
 
             let tx = psbt.extract_tx().map_err(|e| {
                 Status::failed_precondition(format!(
@@ -793,6 +793,10 @@ pub async fn broadcast_wallet_transaction(
                     e
                 ))
             })?;
+
+            // Preconditions OK — *now* connect to electrs.
+            let client = ElectrumClient::connect(CONFIG.electrs_url())
+                .map_err(|e| Status::internal(format!("Failed to connect to electrs: {}", e)))?;
 
             client
                 .broadcast(&tx)
@@ -918,5 +922,303 @@ mod tests {
         let status = map_psbt_lookup_error(err, "Original PSBT lookup failed");
         assert_eq!(status.code(), Code::Internal);
         assert!(status.message().contains("disk fell over"));
+    }
+
+    // ============================================================
+    // Phase 2 — handler-level integration tests
+    // ============================================================
+    //
+    // Cover error paths for every transaction-handling RPC. Happy paths for
+    // Fund / Sign / Finalize / Broadcast require funded UTXOs and an
+    // available electrum endpoint — deferred to Phase 3.
+
+    use crate::wallet::service::test_support::{make_single_sig_wallet, setup, unique_id};
+
+    // ---- get_wallet_transactions / get_wallet_utxos ---------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_wallet_transactions_returns_not_found_for_unknown_wallet() {
+        setup();
+        let err = get_wallet_transactions(Request::new(GetWalletTransactionsRequest {
+            wallet_id: unique_id("ghost"),
+        }))
+        .await
+        .expect_err("missing wallet must be NotFound");
+        assert_eq!(err.code(), Code::NotFound);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_wallet_transactions_returns_empty_for_fresh_wallet() {
+        let user = unique_id("user");
+        let wallet = unique_id("wallet");
+        let device = unique_id("dev");
+        make_single_sig_wallet(&user, &wallet, &device).await;
+        let resp = get_wallet_transactions(Request::new(GetWalletTransactionsRequest {
+            wallet_id: wallet,
+        }))
+        .await
+        .expect("fresh wallet returns OK")
+        .into_inner();
+        assert!(resp.transactions.is_empty(), "fresh wallet has no txs");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_wallet_utxos_returns_not_found_for_unknown_wallet() {
+        setup();
+        let err = get_wallet_utxos(Request::new(GetWalletUtxosRequest {
+            wallet_id: unique_id("ghost"),
+        }))
+        .await
+        .expect_err("missing wallet must be NotFound");
+        assert_eq!(err.code(), Code::NotFound);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_wallet_utxos_returns_empty_for_fresh_wallet() {
+        let user = unique_id("user");
+        let wallet = unique_id("wallet");
+        let device = unique_id("dev");
+        make_single_sig_wallet(&user, &wallet, &device).await;
+        let resp = get_wallet_utxos(Request::new(GetWalletUtxosRequest { wallet_id: wallet }))
+            .await
+            .expect("fresh wallet returns OK")
+            .into_inner();
+        assert!(resp.utxos.is_empty(), "fresh wallet has no utxos");
+    }
+
+    // ---- fund_wallet_transaction ----------------------------------------
+
+    fn fund_req(wallet_id: &str, address: &str, value: u64) -> FundWalletTransactionRequest {
+        FundWalletTransactionRequest {
+            wallet_id: wallet_id.to_string(),
+            destination_address: address.to_string(),
+            destination_value: value,
+            change_address: String::new(),
+            fee_per_kb: 0,
+            selected_leaf_hash: String::new(),
+            spend_change: false,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fund_wallet_transaction_returns_not_found_for_unknown_wallet() {
+        setup();
+        let err = fund_wallet_transaction(Request::new(fund_req(
+            &unique_id("ghost"),
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            10_000,
+        )))
+        .await
+        .expect_err("missing wallet must be NotFound");
+        assert_eq!(err.code(), Code::NotFound);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fund_wallet_transaction_rejects_malformed_address() {
+        let user = unique_id("user");
+        let wallet = unique_id("wallet");
+        let device = unique_id("dev");
+        make_single_sig_wallet(&user, &wallet, &device).await;
+
+        // Phase 1 regression check: a malformed destination used to panic;
+        // it must now surface as InvalidArgument.
+        let err = fund_wallet_transaction(Request::new(fund_req(
+            &wallet,
+            "definitely-not-an-address",
+            10_000,
+        )))
+        .await
+        .expect_err("malformed address must be InvalidArgument");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().to_lowercase().contains("address"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fund_wallet_transaction_rejects_wrong_network_address() {
+        let user = unique_id("user");
+        let wallet = unique_id("wallet");
+        let device = unique_id("dev");
+        make_single_sig_wallet(&user, &wallet, &device).await;
+
+        // Wallet is testnet (set via test setup); pass a mainnet address.
+        let err = fund_wallet_transaction(Request::new(fund_req(
+            &wallet,
+            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+            10_000,
+        )))
+        .await
+        .expect_err("wrong-network address must be InvalidArgument");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().to_lowercase().contains("network"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fund_wallet_transaction_rejects_insufficient_funds() {
+        // Fresh wallet has no UTXOs; tx_builder.finish() should fail with
+        // InsufficientFunds, surfacing as Status::invalid_argument per the
+        // handler's error mapping.
+        let user = unique_id("user");
+        let wallet = unique_id("wallet");
+        let device = unique_id("dev");
+        make_single_sig_wallet(&user, &wallet, &device).await;
+
+        let err = fund_wallet_transaction(Request::new(fund_req(
+            &wallet,
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            100_000,
+        )))
+        .await
+        .expect_err("empty wallet cannot fund a transaction");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(
+            err.message().contains("Failed to build transaction"),
+            "error should reference build failure, got: {}",
+            err.message()
+        );
+    }
+
+    // ---- add_verify_transaction_signature -------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn add_verify_transaction_signature_returns_not_found_for_unknown_wallet() {
+        setup();
+        let err =
+            add_verify_transaction_signature(Request::new(AddVerifyTransactionSignatureRequest {
+                wallet_id: unique_id("ghost"),
+                txid: String::new(),
+                signedpsbt: String::new(),
+                devicefingerprint: String::new(),
+                devicederivationpath: String::new(),
+            }))
+            .await
+            .expect_err("missing wallet must be NotFound");
+        assert_eq!(err.code(), Code::NotFound);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn add_verify_transaction_signature_rejects_malformed_psbt() {
+        let user = unique_id("user");
+        let wallet = unique_id("wallet");
+        let device = unique_id("dev");
+        make_single_sig_wallet(&user, &wallet, &device).await;
+
+        let err =
+            add_verify_transaction_signature(Request::new(AddVerifyTransactionSignatureRequest {
+                wallet_id: wallet,
+                txid: "any-txid".to_string(),
+                signedpsbt: "not a real psbt".to_string(),
+                devicefingerprint: "deadbeef".to_string(),
+                devicederivationpath: String::new(),
+            }))
+            .await
+            .expect_err("malformed PSBT must be rejected");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("PSBT"));
+    }
+
+    // ---- sign_wallet_transaction ----------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sign_wallet_transaction_returns_not_found_for_unknown_wallet() {
+        setup();
+        let err = sign_wallet_transaction(Request::new(SignWalletTransactionRequest {
+            wallet_id: unique_id("ghost"),
+            txid: "any".to_string(),
+            device_id: "any".to_string(),
+        }))
+        .await
+        .expect_err("missing wallet must be NotFound");
+        assert_eq!(err.code(), Code::NotFound);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sign_wallet_transaction_returns_not_found_for_unknown_psbt() {
+        // Wallet exists, but we never funded a tx → no original PSBT stored.
+        // Phase 1 regression: this used to be Internal (unwrap on missing
+        // PSBT) but now surfaces as NotFound via map_psbt_lookup_error.
+        let user = unique_id("user");
+        let wallet = unique_id("wallet");
+        let device = unique_id("dev");
+        make_single_sig_wallet(&user, &wallet, &device).await;
+
+        let err = sign_wallet_transaction(Request::new(SignWalletTransactionRequest {
+            wallet_id: wallet,
+            txid: "nonexistent-txid".to_string(),
+            device_id: device,
+        }))
+        .await
+        .expect_err("missing original PSBT must be NotFound");
+        assert_eq!(err.code(), Code::NotFound);
+        assert!(err.message().contains("Original PSBT"));
+    }
+
+    // ---- finalize_wallet_transaction ------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn finalize_wallet_transaction_returns_not_found_for_unknown_wallet() {
+        setup();
+        let err = finalize_wallet_transaction(Request::new(FinalizeWalletTransactionRequest {
+            wallet_id: unique_id("ghost"),
+            txid: "any".to_string(),
+        }))
+        .await
+        .expect_err("missing wallet must be NotFound");
+        assert_eq!(err.code(), Code::NotFound);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn finalize_wallet_transaction_returns_not_found_when_no_signed_psbts() {
+        // Regression for the Phase-1-prep fix: get_signed_psbts now returns
+        // Ok(empty) instead of Err(NotFound), so the handler's is_empty
+        // check fires and we get the correct NotFound — not Internal as
+        // before.
+        let user = unique_id("user");
+        let wallet = unique_id("wallet");
+        let device = unique_id("dev");
+        make_single_sig_wallet(&user, &wallet, &device).await;
+
+        let err = finalize_wallet_transaction(Request::new(FinalizeWalletTransactionRequest {
+            wallet_id: wallet,
+            txid: "no-such-tx".to_string(),
+        }))
+        .await
+        .expect_err("no signed PSBTs must be NotFound");
+        assert_eq!(err.code(), Code::NotFound);
+        assert!(err.message().to_lowercase().contains("signed psbt"));
+    }
+
+    // ---- broadcast_wallet_transaction -----------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn broadcast_wallet_transaction_returns_not_found_for_unknown_wallet() {
+        setup();
+        let err = broadcast_wallet_transaction(Request::new(BroadcastWalletTransactionRequest {
+            wallet_id: unique_id("ghost"),
+            txid: "any".to_string(),
+        }))
+        .await
+        .expect_err("missing wallet must be NotFound");
+        assert_eq!(err.code(), Code::NotFound);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn broadcast_wallet_transaction_rejects_missing_finalized_psbt() {
+        // No finalize step has run for this wallet — the handler returns
+        // FailedPrecondition pointing the caller at finalize_*.
+        let user = unique_id("user");
+        let wallet = unique_id("wallet");
+        let device = unique_id("dev");
+        make_single_sig_wallet(&user, &wallet, &device).await;
+
+        let err = broadcast_wallet_transaction(Request::new(BroadcastWalletTransactionRequest {
+            wallet_id: wallet,
+            txid: "no-such-tx".to_string(),
+        }))
+        .await
+        .expect_err("missing finalized PSBT must error");
+        // The handler maps the underlying io::Error to FailedPrecondition
+        // (it points the caller at finalize_wallet_transaction first).
+        assert_eq!(err.code(), Code::FailedPrecondition);
+        assert!(err.message().contains("finalize_wallet_transaction"));
     }
 }

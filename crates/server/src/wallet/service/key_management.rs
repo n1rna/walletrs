@@ -182,12 +182,17 @@ pub async fn list_managed_keys(
 ) -> Result<Response<ListManagedKeysResponse>, Status> {
     let req = request.into_inner();
 
-    // Convert empty strings to None for optional filters
-    let user_id_filter = if req.user_id.is_empty() {
-        None
-    } else {
-        Some(req.user_id.as_str())
-    };
+    // The managed-keys storage scope is per-user; listing without a
+    // user_id is meaningless and would only succeed for an admin tool
+    // we don't expose here. Reject up front so the failure is the right
+    // gRPC code (InvalidArgument, not Internal masquerading as a storage
+    // error from a layer below).
+    if req.user_id.is_empty() {
+        return Err(Status::invalid_argument(
+            "user_id is required to list managed keys",
+        ));
+    }
+    let user_id_filter = Some(req.user_id.as_str());
     let key_type_filter = if req.key_type.is_empty() {
         None
     } else {
@@ -216,5 +221,292 @@ pub async fn list_managed_keys(
             "Failed to list managed keys: {}",
             e
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wallet::service::test_support::{
+        make_customer_key, make_system_key, setup, test_xpub, unique_id,
+    };
+    use tonic::Code;
+
+    // ---- create_system_managed_key ---------------------------------------
+
+    #[tokio::test]
+    async fn create_system_managed_key_rejects_empty_user_id() {
+        setup();
+        let err = create_system_managed_key(Request::new(CreateSystemManagedKeysRequest {
+            user_id: String::new(),
+            device_id: "any-device".to_string(),
+            key_name: String::new(),
+        }))
+        .await
+        .expect_err("empty user_id must be rejected");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("user_id"));
+    }
+
+    #[tokio::test]
+    async fn create_system_managed_key_rejects_empty_device_id() {
+        setup();
+        let err = create_system_managed_key(Request::new(CreateSystemManagedKeysRequest {
+            user_id: unique_id("user"),
+            device_id: String::new(),
+            key_name: String::new(),
+        }))
+        .await
+        .expect_err("empty device_id must be rejected");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("device_id"));
+    }
+
+    #[tokio::test]
+    async fn create_system_managed_key_persists_descriptor_formatted_xpub() {
+        setup();
+        let user = unique_id("user");
+        let device = unique_id("dev");
+        let resp = create_system_managed_key(Request::new(CreateSystemManagedKeysRequest {
+            user_id: user.clone(),
+            device_id: device.clone(),
+            key_name: "primary-system".to_string(),
+        }))
+        .await
+        .expect("create_system_managed_key happy path")
+        .into_inner();
+
+        assert_eq!(resp.user_id, user);
+        assert_eq!(resp.device_id, device);
+        assert_eq!(resp.status, "success");
+        assert_eq!(resp.fingerprint.len(), 8, "fingerprint must be 8 hex chars");
+        assert!(
+            resp.xpub.starts_with('['),
+            "descriptor xpub must include origin prefix `[fp/path]xpub...`, got: {}",
+            resp.xpub
+        );
+        assert!(
+            resp.xpub.ends_with("/*"),
+            "system key must store a multipath xpub, got: {}",
+            resp.xpub
+        );
+
+        // Round-trip via get_managed_key.
+        let fetched = get_managed_key(Request::new(GetManagedKeyRequest {
+            user_id: user,
+            device_id: device,
+            key_type: "system".to_string(),
+        }))
+        .await
+        .expect("get_managed_key after create")
+        .into_inner();
+        assert!(fetched.found);
+        let key = fetched.key.expect("key present");
+        assert_eq!(key.fingerprint, resp.fingerprint);
+    }
+
+    // ---- create_customer_managed_key -------------------------------------
+
+    #[tokio::test]
+    async fn create_customer_managed_key_rejects_empty_user_id() {
+        setup();
+        let (fp, xpub) = test_xpub(7001);
+        let err = create_customer_managed_key(Request::new(CreateCustomerManagedKeyRequest {
+            user_id: String::new(),
+            device_id: "any-device".to_string(),
+            key_name: String::new(),
+            xpub,
+            fingerprint: fp,
+            derivation_path: "m/84'/1'/0'".to_string(),
+        }))
+        .await
+        .expect_err("empty user_id must be rejected");
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn create_customer_managed_key_rejects_empty_device_id() {
+        setup();
+        let (fp, xpub) = test_xpub(7002);
+        let err = create_customer_managed_key(Request::new(CreateCustomerManagedKeyRequest {
+            user_id: unique_id("user"),
+            device_id: String::new(),
+            key_name: String::new(),
+            xpub,
+            fingerprint: fp,
+            derivation_path: "m/84'/1'/0'".to_string(),
+        }))
+        .await
+        .expect_err("empty device_id must be rejected");
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn create_customer_managed_key_rejects_empty_xpub() {
+        setup();
+        let err = create_customer_managed_key(Request::new(CreateCustomerManagedKeyRequest {
+            user_id: unique_id("user"),
+            device_id: unique_id("dev"),
+            key_name: String::new(),
+            xpub: String::new(),
+            fingerprint: "deadbeef".to_string(),
+            derivation_path: "m/84'/1'/0'".to_string(),
+        }))
+        .await
+        .expect_err("empty xpub must be rejected");
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn create_customer_managed_key_rejects_empty_fingerprint() {
+        setup();
+        let (_, xpub) = test_xpub(7003);
+        let err = create_customer_managed_key(Request::new(CreateCustomerManagedKeyRequest {
+            user_id: unique_id("user"),
+            device_id: unique_id("dev"),
+            key_name: String::new(),
+            xpub,
+            fingerprint: String::new(),
+            derivation_path: "m/84'/1'/0'".to_string(),
+        }))
+        .await
+        .expect_err("empty fingerprint must be rejected");
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn create_customer_managed_key_happy_path_round_trips() {
+        let user = unique_id("user");
+        let device = unique_id("dev");
+        make_customer_key(&user, &device, 7100).await;
+
+        let fetched = get_managed_key(Request::new(GetManagedKeyRequest {
+            user_id: user.clone(),
+            device_id: device.clone(),
+            key_type: "customer".to_string(),
+        }))
+        .await
+        .expect("get_managed_key after create")
+        .into_inner();
+        assert!(fetched.found, "customer key must be retrievable");
+        let key = fetched.key.expect("key present");
+        assert_eq!(key.user_id, user);
+        assert_eq!(key.device_id, device);
+        assert_eq!(key.key_type, "customer");
+    }
+
+    // ---- get_managed_key -------------------------------------------------
+
+    #[tokio::test]
+    async fn get_managed_key_rejects_empty_user_id() {
+        setup();
+        let err = get_managed_key(Request::new(GetManagedKeyRequest {
+            user_id: String::new(),
+            device_id: "d".to_string(),
+            key_type: "system".to_string(),
+        }))
+        .await
+        .expect_err("empty user_id must be rejected");
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn get_managed_key_rejects_empty_key_type() {
+        setup();
+        let err = get_managed_key(Request::new(GetManagedKeyRequest {
+            user_id: "u".to_string(),
+            device_id: "d".to_string(),
+            key_type: String::new(),
+        }))
+        .await
+        .expect_err("empty key_type must be rejected");
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn get_managed_key_returns_found_false_for_unknown_device() {
+        setup();
+        let resp = get_managed_key(Request::new(GetManagedKeyRequest {
+            user_id: unique_id("user"),
+            device_id: unique_id("nonexistent"),
+            key_type: "system".to_string(),
+        }))
+        .await
+        .expect("missing device returns Ok(not-found) not an error")
+        .into_inner();
+        assert!(!resp.found, "missing device must surface as found=false");
+        assert!(resp.key.is_none());
+    }
+
+    // ---- list_managed_keys -----------------------------------------------
+
+    #[tokio::test]
+    async fn list_managed_keys_filters_by_user_and_key_type() {
+        let user = unique_id("user");
+        let other_user = unique_id("other-user");
+
+        let device_sys = unique_id("dev-sys");
+        let device_cust = unique_id("dev-cust");
+        let _ = make_system_key(&user, &device_sys).await;
+        make_customer_key(&user, &device_cust, 7200).await;
+        // Pollute with a key for a different user to ensure filtering works.
+        let _ = make_system_key(&other_user, &unique_id("dev-other")).await;
+
+        // user-scoped list returns both of this user's keys.
+        let all_for_user = list_managed_keys(Request::new(ListManagedKeysRequest {
+            user_id: user.clone(),
+            key_type: String::new(),
+        }))
+        .await
+        .expect("list by user")
+        .into_inner();
+        let our_devices: Vec<_> = all_for_user
+            .keys
+            .iter()
+            .map(|k| k.device_id.as_str())
+            .collect();
+        assert!(
+            our_devices.contains(&device_sys.as_str()),
+            "user list should include system key, got: {:?}",
+            our_devices
+        );
+        assert!(
+            our_devices.contains(&device_cust.as_str()),
+            "user list should include customer key, got: {:?}",
+            our_devices
+        );
+        // Filtered: must NOT include the other user's device.
+        for k in &all_for_user.keys {
+            assert_eq!(k.user_id, user, "user filter must be respected");
+        }
+
+        // user + key_type=system returns only the system key.
+        let only_sys = list_managed_keys(Request::new(ListManagedKeysRequest {
+            user_id: user.clone(),
+            key_type: "system".to_string(),
+        }))
+        .await
+        .expect("list by user+type")
+        .into_inner();
+        assert!(only_sys.keys.iter().all(|k| k.key_type == "system"));
+        assert!(only_sys.keys.iter().any(|k| k.device_id == device_sys));
+        assert!(only_sys.keys.iter().all(|k| k.device_id != device_cust));
+    }
+
+    #[tokio::test]
+    async fn list_managed_keys_rejects_empty_user_id() {
+        setup();
+        let err = list_managed_keys(Request::new(ListManagedKeysRequest {
+            user_id: String::new(),
+            key_type: String::new(),
+        }))
+        .await
+        .expect_err("empty user_id must be rejected with InvalidArgument");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(
+            err.message().contains("user_id"),
+            "error must explain that user_id is required, got: {}",
+            err.message()
+        );
     }
 }

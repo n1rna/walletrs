@@ -7,6 +7,9 @@ pub mod transaction_handling;
 pub mod wallet_creation;
 pub mod wallet_operations;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 use crate::proto::pb::wallet_service_server::WalletService;
 use crate::proto::pb::{
     AddVerifyTransactionSignatureRequest,
