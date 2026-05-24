@@ -12,13 +12,17 @@ readme = "../../README.md"
 tonic = "0.9"
 prost = "0.11"
 tokio = { version = "1.0", features = ["full"] }
-bdk = "0.30.1"
+# `bdk = "0.30"` (pre-1.0) and `bitcoin = "0.30"` used to be in the dep
+# list but neither is `use`d anywhere — they were leftovers from the
+# migration to `bdk_wallet 1.x`. Removing them drops the entire
+# vulnerable old-rustls / old-electrum-client chain that they were
+# silently pulling in. All Bitcoin types now reach us via
+# `bdk_wallet::bitcoin::*` and `bdk_wallet`'s feature-gated re-exports.
 bdk_wallet = { version = "1.1.0", features = ["file_store", "bip39", "keys-bip39"] }
 bdk_file_store = "0.18.1"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-bitcoin = "0.30"
 log = "0.4"
 hex = "0.4.3"
 chrono = "0.4.40"

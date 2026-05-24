@@ -26,8 +26,12 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
 # Reviewed and accepted RUSTSEC IDs. Re-evaluate when upstream fixes
-# ship — the structured form makes that easier than a flat list.
+# ship — the structured form makes that easier than a flat list. Mirror
+# this list in `.github/workflows/ci.yml`'s `audit` step so the two
+# gates stay in sync.
 ignore = [
+    # --- Unsoundness, not vulnerability -------------------------------
+
     # `lru` 0.12.5 has a Stacked Borrows violation in IterMut. We don't
     # call `IterMut` on `lru::LruCache`; it's a transitive dep (via
     # hyper / tonic pools). Track upstream PR 224.
@@ -39,6 +43,41 @@ ignore = [
     # only the default `env_logger`, and we don't call `rng()` from a
     # logger. Track upstream PR 1763.
     { id = "RUSTSEC-2026-0097", reason = "unreachable: requires custom logger calling rand::rng() during reseed" },
+
+    # --- Vulnerable transitive via aws-smithy-http-client -------------
+    #
+    # `aws-smithy-http-client v1.1.12` (latest as of this writing) pulls
+    # the legacy `rustls 0.21` + `rustls-webpki 0.101.x` chain via its
+    # `legacy-rustls-ring` default feature. The fixes for these
+    # advisories ship only in `rustls-webpki >= 0.103.10` / `>= 0.103.13`,
+    # and aws-smithy hasn't migrated yet (tracked at
+    # https://github.com/smithy-lang/smithy-rs).
+    #
+    # We only reach the vulnerable code via S3 TLS connections to AWS
+    # endpoints. AWS-managed endpoints don't issue CRLs that an attacker
+    # could weaponize and aren't presented under attacker-controlled
+    # name constraints — the threat models for these vulns assume a
+    # malicious CA or attacker-controlled certificate chain, which is
+    # not the trust path for s3.amazonaws.com.
+    #
+    # When aws-smithy migrates to `rustls 0.23` / `rustls-webpki 0.103`,
+    # these auto-resolve via `cargo update` and the ignores can be
+    # dropped.
+
+    { id = "RUSTSEC-2026-0049", reason = "rustls-webpki 0.101.7 via aws-smithy; CRL distribution-point matching only matters under attacker-controlled CA, not S3" },
+    { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.101.7 via aws-smithy; URI-name-constraint scope only matters under attacker-controlled CA, not S3" },
+    { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.101.7 via aws-smithy; wildcard-name-constraint scope only matters under attacker-controlled CA, not S3" },
+    { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.101.7 via aws-smithy; reachable panic in CRL parsing not exposed because AWS S3 doesn't serve CRLs" },
+
+    # --- Unmaintained ------------------------------------------------
+
+    # `bincode 1.x` is no longer maintained upstream. It's a transitive
+    # via `bdk_file_store` which we use to persist BDK wallet state.
+    # bdk_file_store hasn't migrated to bincode 2; track at
+    # https://github.com/bitcoindevkit/bdk. No active CVE — this is a
+    # "no future security fixes" notice. Re-evaluate if a real vuln
+    # surfaces in bincode 1.x.
+    { id = "RUSTSEC-2025-0141", reason = "transitive via bdk_file_store; no active CVE — re-evaluate on bdk_file_store bincode 2 migration" },
 ]
 
 [licenses]
@@ -70,12 +109,17 @@ confidence-threshold = 0.8
 # version bump forces a re-review.
 exceptions = [
     # `ring` ships a custom LICENSE file (BoringSSL-derived) with no
-    # SPDX expression in its manifest. cargo-deny's heuristic guesses
-    # "OpenSSL" with low confidence. The actual license is permissive
-    # ISC + MIT + an OpenSSL-style attribution clause, which is
-    # compatible with our dual MIT/Apache-2.0 licensing. Re-check on
-    # ring version bumps in case the license terms change.
-    { allow = ["ISC", "MIT", "OpenSSL"], crate = "ring@0.17.9" },
+    # SPDX expression in its manifest. cargo-deny scans the LICENSE
+    # file and detects an OpenSSL-attribution clause with low
+    # confidence. The actual license is permissive ISC + MIT + an
+    # OpenSSL-style attribution clause, compatible with our dual
+    # MIT/Apache-2.0 licensing.
+    #
+    # No version pin: the license terms haven't changed across the
+    # 0.17.x line and re-pinning every patch bump is noise. If ring
+    # ever changes its license, that'd be a major upstream event we'd
+    # notice independently.
+    { allow = ["OpenSSL"], crate = "ring" },
 ]
 
 [bans]
