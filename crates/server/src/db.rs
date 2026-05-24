@@ -239,26 +239,21 @@ pub fn get_finalized_psbt(wallet_id: &str, txid: &str) -> Result<String, std::io
     }
 }
 
+/// List the signed PSBTs persisted for `(wallet_id, txid)`. Returns
+/// `Ok(vec![])` when nothing has been stored — matching the standard
+/// "list-query returns an empty list, not an error" convention. Callers
+/// (e.g. `finalize_wallet_transaction`) check `is_empty()` to decide
+/// whether finalization can proceed.
+///
+/// Earlier versions returned `NotFound` on empty; that made the handler's
+/// own `is_empty()` check dead code, and pushed an unusual "missing means
+/// error" semantic on what is fundamentally a list query.
 pub fn get_signed_psbts(
     wallet_id: &str,
     txid: &str,
 ) -> Result<Vec<StoredSignedPSBT>, std::io::Error> {
     let storage_manager = get_storage_manager();
-    let signed_psbts = StoredSignedPSBT::list_by_txid(storage_manager, wallet_id, txid)
-        .map_err(convert_storage_error)?;
-
-    if signed_psbts.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!(
-                "No signed PSBTs found for wallet {} and txid {}",
-                wallet_id, txid
-            ),
-        ));
-    }
-
-    // Convert to legacy format for backward compatibility
-    Ok(signed_psbts)
+    StoredSignedPSBT::list_by_txid(storage_manager, wallet_id, txid).map_err(convert_storage_error)
 }
 
 // New unified PSBT operations
