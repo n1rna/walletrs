@@ -78,15 +78,11 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # Mirror of deny.toml `[advisories].ignore`. Reasons documented
-          # there in long form — keep these two lists in sync.
-          ignore: |
-            RUSTSEC-2026-0002
-            RUSTSEC-2026-0097
-            RUSTSEC-2026-0049
-            RUSTSEC-2026-0098
-            RUSTSEC-2026-0099
-            RUSTSEC-2026-0104
-            RUSTSEC-2025-0141
+          # there in long form — keep these two lists in sync. The
+          # `rustsec/audit-check@v2` action only honours the first line of
+          # a multi-line YAML block scalar, so the IDs are joined with
+          # commas on a single line.
+          ignore: RUSTSEC-2026-0002,RUSTSEC-2026-0097,RUSTSEC-2026-0049,RUSTSEC-2026-0098,RUSTSEC-2026-0099,RUSTSEC-2026-0104,RUSTSEC-2025-0141
 
   deny:
     name: cargo deny
