@@ -11,7 +11,11 @@
 use libfuzzer_sys::fuzz_target;
 use std::str::FromStr;
 
-use walletrs::LianaDescriptor;
+// The server crate exposes its library as `walletrs_lib` (the Cargo
+// package is named `walletrs` but the [lib] block renames it). The fuzz
+// target depends on the same crate via the `walletrs = { path = ".." }`
+// entry in fuzz/Cargo.toml; the lib import path is `walletrs_lib`.
+use walletrs_lib::LianaDescriptor;
 
 fuzz_target!(|data: &[u8]| {
     let s = match std::str::from_utf8(data) {

@@ -30,9 +30,12 @@ uuid = { version = "1.7.0", features = ["v4"] }
 prettytable-rs = "0.10.0"
 regex = "1.11.1"
 thiserror = "2.0"
-liana = { path = "../../contrib/liana" }
-policy-core = { path = "../policy-core" }
-wallet-runtime = { path = "../wallet-runtime" }
+# Path deps explicitly carry a `version` field so cargo-deny's wildcard
+# check doesn't treat them as unbounded — see `deny.toml` and PR #19
+# CI triage.
+liana = { path = "../../contrib/liana", version = "12.0" }
+policy-core = { path = "../policy-core", version = "0.1" }
+wallet-runtime = { path = "../wallet-runtime", version = "0.1" }
 miniscript = { version = "12.0", features = ["serde", "compiler", "base64"] }
 tower = { version = "0.4", features = ["util"] }
 hyper = "0.14"
@@ -74,7 +77,11 @@ tempfile = "3"
 proptest = "1"
 
 [build-dependencies]
-tonic-build = "*"
+# Pinned to the major release whose API (`tonic_build::configure()`) the
+# build script uses. The previous `*` let cargo-fuzz's separate Cargo.lock
+# resolve to a newer version that removed the function. See PR #19 CI
+# triage.
+tonic-build = "0.9"
 pbjson-build = "0.5"
 prost-reflect = "0.11"
 prost-types = "0.11"

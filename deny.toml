@@ -25,8 +25,21 @@ no-default-features = false
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
-# Specific RUSTSEC IDs we've reviewed and accepted (empty for now).
-ignore = []
+# Reviewed and accepted RUSTSEC IDs. Re-evaluate when upstream fixes
+# ship — the structured form makes that easier than a flat list.
+ignore = [
+    # `lru` 0.12.5 has a Stacked Borrows violation in IterMut. We don't
+    # call `IterMut` on `lru::LruCache`; it's a transitive dep (via
+    # hyper / tonic pools). Track upstream PR 224.
+    { id = "RUSTSEC-2026-0002", reason = "transitive only via hyper/tonic; we never call IterMut on lru caches" },
+
+    # `rand` 0.8.5 has an unsoundness that requires (1) a custom `log`
+    # implementation that itself calls `rand::rng()` and (2) the rand
+    # consumer hitting a reseed during the logger call. Walletrs uses
+    # only the default `env_logger`, and we don't call `rng()` from a
+    # logger. Track upstream PR 1763.
+    { id = "RUSTSEC-2026-0097", reason = "unreachable: requires custom logger calling rand::rng() during reseed" },
+]
 
 [licenses]
 # Walletrs itself is dual MIT/Apache-2.0; we accept the standard open-source
@@ -42,6 +55,9 @@ allow = [
     "ISC",
     "MIT",
     "MIT-0",
+    # `hex_lit` is published under MITNFA (MIT + "no false attribution"
+    # clause). MIT-flavored permissive, just not in the default short list.
+    "MITNFA",
     "MPL-2.0",
     "Unicode-3.0",
     "Unicode-DFS-2016",
@@ -49,9 +65,18 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.8
-# Crates whose license is unclear from metadata but accepted on inspection.
-# Add entries as `{ allow = ["LICENSE"], crate = "name@version" }`.
-exceptions = []
+# Crates whose license is unclear from metadata but accepted on
+# inspection. Add new entries with `crate = "name@version"` so a
+# version bump forces a re-review.
+exceptions = [
+    # `ring` ships a custom LICENSE file (BoringSSL-derived) with no
+    # SPDX expression in its manifest. cargo-deny's heuristic guesses
+    # "OpenSSL" with low confidence. The actual license is permissive
+    # ISC + MIT + an OpenSSL-style attribution clause, which is
+    # compatible with our dual MIT/Apache-2.0 licensing. Re-check on
+    # ring version bumps in case the license terms change.
+    { allow = ["ISC", "MIT", "OpenSSL"], crate = "ring@0.17.9" },
+]
 
 [bans]
 # Catches duplicate crates that sneak in via mismatched semver ranges — a
