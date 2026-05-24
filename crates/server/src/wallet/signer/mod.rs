@@ -562,4 +562,55 @@ mod tests {
             );
         }
     }
+
+    // ---- property tests -------------------------------------------------
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Any 4-byte fingerprint round-trips through display + parse_stored_fingerprint
+        /// exactly. The serialized form is `format!("{:08x}", ...)` (8 lowercase
+        /// hex chars); parsing back must give us the same display.
+        #[test]
+        fn prop_fingerprint_round_trips(bytes in prop::array::uniform4(any::<u8>())) {
+            let fp = bdk_wallet::bitcoin::bip32::Fingerprint::from(bytes);
+            let serialized = format!("{}", fp);
+            let parsed = parse_stored_fingerprint(&serialized, "dev")
+                .expect("self-serialized fingerprint must parse");
+            prop_assert_eq!(format!("{}", parsed), serialized);
+        }
+
+        /// Any string that is *not* exactly 8 lowercase hex chars (or its
+        /// uppercase equivalent) must be rejected. Catches regressions
+        /// where someone accidentally accepts longer/shorter inputs.
+        #[test]
+        fn prop_fingerprint_rejects_wrong_length(
+            s in "[^/]{0,7}|[a-fA-F0-9]{9,32}"
+        ) {
+            prop_assert!(
+                parse_stored_fingerprint(&s, "dev").is_err(),
+                "input {:?} (len {}) must not parse as a 4-byte fingerprint",
+                s, s.len()
+            );
+        }
+
+        /// Any string that contains non-hex characters at length 8 must
+        /// also be rejected. Confirms we're not silently filtering.
+        #[test]
+        fn prop_fingerprint_rejects_non_hex_at_correct_length(
+            // 8 chars but with at least one non-hex symbol. Use a fixed
+            // pattern with a guaranteed-non-hex byte.
+            prefix in "[a-fA-F0-9]{4}",
+            suffix in "[a-fA-F0-9]{3}",
+            bad in prop_oneof!["g", "z", "!", "_", "-"],
+        ) {
+            let s = format!("{}{}{}", prefix, bad, suffix);
+            prop_assert_eq!(s.len(), 8);
+            prop_assert!(
+                parse_stored_fingerprint(&s, "dev").is_err(),
+                "input {:?} (8 chars but contains {:?}) must be rejected",
+                s, bad
+            );
+        }
+    }
 }

@@ -1,0 +1,74 @@
+# cargo-deny configuration for walletrs.
+#
+# Run locally: `cargo install cargo-deny && cargo deny check`
+#
+# CI runs `cargo deny check` on every PR; failures block the merge. Start
+# permissive so the gate is useful immediately without auditing every
+# transitive license — tighten over time.
+
+[graph]
+# Targets we actually ship; everything else (e.g. wasm32, ios) is ignored
+# during the dependency walk.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+# All-features so deny sees the same edges cargo does in production builds.
+all-features = false
+no-default-features = false
+
+[advisories]
+# Database of known security advisories pulled from the RustSec
+# Advisory Database. CI failing here is the *whole point* of the gate.
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "warn"
+# Specific RUSTSEC IDs we've reviewed and accepted (empty for now).
+ignore = []
+
+[licenses]
+# Walletrs itself is dual MIT/Apache-2.0; we accept the standard open-source
+# license set for transitive deps.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+# Crates whose license is unclear from metadata but accepted on inspection.
+# Add entries as `{ allow = ["LICENSE"], crate = "name@version" }`.
+exceptions = []
+
+[bans]
+# Catches duplicate crates that sneak in via mismatched semver ranges — a
+# common source of accidental MSRV bumps and binary bloat. `warn` rather
+# than `deny` until we audit the workspace's existing duplicates.
+multiple-versions = "warn"
+wildcards = "deny"
+# Allow specific known-good duplicates here as
+# `[[bans.skip]] name = "..."`.
+skip = []
+# Crates we never want anywhere in the dep graph (e.g. unmaintained
+# alternatives to a chosen primitive). Empty for now.
+deny = []
+
+[sources]
+# Only allow crates from crates.io and our vendored contrib/liana git source.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

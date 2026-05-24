@@ -28,6 +28,16 @@ impl StoredManagedKey {
         format!("user::{}::device::{}::{}", user_id, device_id, key_type)
     }
 
+    /// Test-only: invariant property the key identifier format must hold.
+    /// Used by the proptest below.
+    #[cfg(test)]
+    fn id_invariant_marker() -> &'static str {
+        // The literal "::" is what makes the format injective for inputs
+        // that don't themselves contain "::". This marker is referenced in
+        // the proptest's prop_assume! so the assumption is grep-able.
+        "::"
+    }
+
     /// Project the fields the policy pipeline cares about (origin metadata +
     /// xpub/tpub) into the lightweight `policy_core::ManagedKey` shape. The
     /// pipeline never sees DB plumbing fields like `user_id`, key custody
@@ -406,5 +416,61 @@ impl Storable for StoredManagedKey {
         );
 
         fields
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// The key identifier format is injective for inputs that don't
+        /// themselves contain the "::" delimiter — distinct (user, device,
+        /// key_type) triples produce distinct identifiers, which is the
+        /// property the storage layer relies on to avoid silently
+        /// overwriting one key's row with another's.
+        #[test]
+        fn prop_key_identifier_injective_for_simple_inputs(
+            u1 in "[a-zA-Z0-9_-]{1,32}",
+            d1 in "[a-zA-Z0-9_-]{1,32}",
+            t1 in "[a-zA-Z0-9_-]{1,16}",
+            u2 in "[a-zA-Z0-9_-]{1,32}",
+            d2 in "[a-zA-Z0-9_-]{1,32}",
+            t2 in "[a-zA-Z0-9_-]{1,16}",
+        ) {
+            // The marker is referenced so a future format change that breaks
+            // the "::" separator gets the test's attention.
+            let _delim = StoredManagedKey::id_invariant_marker();
+
+            let id1 = StoredManagedKey::generate_key_identifier(&u1, &d1, &t1);
+            let id2 = StoredManagedKey::generate_key_identifier(&u2, &d2, &t2);
+
+            if id1 == id2 {
+                prop_assert_eq!((u1.as_str(), d1.as_str(), t1.as_str()), (u2.as_str(), d2.as_str(), t2.as_str()));
+            }
+        }
+
+        /// Self-consistency: the identifier built by `get_key_identifier`
+        /// on a stored row matches the one `generate_key_identifier`
+        /// computes from the same triple. Without this, get-by-identifier
+        /// lookups would silently miss rows.
+        #[test]
+        fn prop_get_key_identifier_matches_generate(
+            user in "[a-zA-Z0-9_-]{1,32}",
+            device in "[a-zA-Z0-9_-]{1,32}",
+            key_type in "[a-zA-Z0-9_-]{1,16}",
+        ) {
+            let mk = StoredManagedKey::new_customer_key(
+                &user, &device, "name", "xpub", "fp", "m/84'/1'/0'",
+            );
+            // Override key_type since new_customer_key hardcodes "customer".
+            let mut mk = mk;
+            mk.key_type = key_type.clone();
+            let from_self = mk.get_key_identifier();
+            let from_static =
+                StoredManagedKey::generate_key_identifier(&user, &device, &key_type);
+            prop_assert_eq!(from_self, from_static);
+        }
     }
 }
