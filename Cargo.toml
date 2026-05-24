@@ -6,6 +6,10 @@ members = [
     "crates/server",
     "contrib/liana",
 ]
+# The fuzz subcrate is its own workspace; it depends on libfuzzer-sys (nightly
+# toolchain) and isn't part of the regular build. Run with
+# `cd crates/server/fuzz && cargo +nightly fuzz run <target>`.
+exclude = ["crates/server/fuzz"]
 
 # Trade ~5% runtime speed for ~2-3× faster release compiles.
 # walletrs is gRPC/IO bound, extra codegen parallelism wins everywhere.

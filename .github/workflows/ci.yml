@@ -64,3 +64,57 @@ jobs:
           tags: walletrs:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    # Blocking: a new RUSTSEC advisory we haven't triaged must stop the
+    # PR. The `ignore` list below mirrors `deny.toml`'s ignores so the two
+    # gates stay in sync — when a RUSTSEC entry is added or removed, edit
+    # both.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Mirror of deny.toml `[advisories].ignore`. Reasons documented
+          # there in long form — keep these two lists in sync. The
+          # `rustsec/audit-check@v2` action only honours the first line of
+          # a multi-line YAML block scalar, so the IDs are joined with
+          # commas on a single line.
+          ignore: RUSTSEC-2026-0002,RUSTSEC-2026-0097,RUSTSEC-2026-0049,RUSTSEC-2026-0098,RUSTSEC-2026-0099,RUSTSEC-2026-0104,RUSTSEC-2025-0141
+
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned to a release tag so config-format changes don't silently
+      # break the gate.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          # Run all four check categories: advisories, bans, licenses,
+          # sources. Config lives in `deny.toml` at the repo root.
+          arguments: --all-features
+
+  fuzz-check:
+    name: fuzz targets compile
+    runs-on: ubuntu-latest
+    # `cargo fuzz` itself needs nightly because libfuzzer-sys does, but
+    # `cargo check` from inside the fuzz crate (with the nightly toolchain
+    # selected via rust-toolchain) is enough to catch drift in target
+    # definitions without paying for a fuzz run.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/server/fuzz
+      - name: install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
+      - name: check fuzz targets compile
+        working-directory: crates/server/fuzz
+        run: cargo check --bins

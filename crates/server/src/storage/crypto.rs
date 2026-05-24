@@ -138,4 +138,69 @@ mod tests {
         let short = BASE64.encode([0u8; 16]);
         assert!(EnvelopeCipher::from_base64(&short).is_err());
     }
+
+    // ---- property tests -------------------------------------------------
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// For any byte sequence (including empty) and any 32-byte key,
+        /// encrypt → decrypt recovers the original plaintext exactly.
+        /// Catches any future regression where a length-edge-case slips
+        /// through the AEAD wrapping.
+        #[test]
+        fn prop_round_trip_recovers_plaintext(
+            plaintext in prop::collection::vec(any::<u8>(), 0..2048),
+            key_bytes in prop::array::uniform32(any::<u8>()),
+        ) {
+            let cipher = EnvelopeCipher::from_base64(&BASE64.encode(key_bytes))
+                .expect("32-byte key always parses");
+            let ct = cipher.encrypt(&plaintext).expect("encrypt");
+            let pt = cipher.decrypt(&ct).expect("decrypt with the same key");
+            prop_assert_eq!(pt, plaintext);
+        }
+
+        /// Two distinct encryptions of the same plaintext (random nonces)
+        /// must never produce identical ciphertexts. Reuse of nonces with
+        /// XChaCha20Poly1305 would be catastrophic; this property is a
+        /// proxy that ensures the random nonce code path is wired.
+        #[test]
+        fn prop_nonces_are_distinct(
+            plaintext in prop::collection::vec(any::<u8>(), 1..256),
+            key_bytes in prop::array::uniform32(any::<u8>()),
+        ) {
+            let cipher = EnvelopeCipher::from_base64(&BASE64.encode(key_bytes))
+                .expect("32-byte key always parses");
+            let ct1 = cipher.encrypt(&plaintext).expect("encrypt 1");
+            let ct2 = cipher.encrypt(&plaintext).expect("encrypt 2");
+            prop_assert_ne!(ct1, ct2);
+        }
+
+        /// Decryption with the wrong key never succeeds for non-trivially
+        /// short inputs. We restrict to plaintexts ≥ 1 byte to avoid an
+        /// edge case where empty AEAD output may incidentally decode under
+        /// arbitrary keys.
+        #[test]
+        fn prop_wrong_key_rejects(
+            plaintext in prop::collection::vec(any::<u8>(), 1..256),
+            key_a in prop::array::uniform32(any::<u8>()),
+            key_b in prop::array::uniform32(any::<u8>()),
+        ) {
+            prop_assume!(key_a != key_b);
+            let ca = EnvelopeCipher::from_base64(&BASE64.encode(key_a)).unwrap();
+            let cb = EnvelopeCipher::from_base64(&BASE64.encode(key_b)).unwrap();
+            let ct = ca.encrypt(&plaintext).unwrap();
+            prop_assert!(cb.decrypt(&ct).is_err());
+        }
+
+        /// A KEK that doesn't decode to exactly 32 bytes is always
+        /// rejected. Ensures the length check holds for the full domain,
+        /// not just the few values in the explicit test above.
+        #[test]
+        fn prop_non_32_byte_key_rejected(len in (0usize..32usize).prop_union(33usize..128usize)) {
+            let bytes = vec![0u8; len];
+            let encoded = BASE64.encode(&bytes);
+            prop_assert!(EnvelopeCipher::from_base64(&encoded).is_err());
+        }
+    }
 }

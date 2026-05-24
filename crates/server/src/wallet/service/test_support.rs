@@ -230,3 +230,69 @@ pub async fn make_multisig_wallet(user_id: &str, wallet_id: &str, device_ids: [&
     .await
     .expect("create_generic_wallet multisig fixture must succeed");
 }
+
+// ---- UTXO injection --------------------------------------------------------
+
+/// Inject a fake UTXO of `value_sats` into `wallet_id` by:
+///   1. loading the wallet via `BdkWalletManager`
+///   2. revealing the next external address
+///   3. building a synthetic `Transaction` whose only output pays that
+///      address
+///   4. recording the tx as unconfirmed (BDK's default coin selection
+///      accepts unconfirmed inputs)
+///   5. persisting the resulting changeset through `R2BackedStore`
+///
+/// Returns the funding-tx `Txid` (as a string) so callers can assert on it
+/// downstream. Lets handler tests exercise the full Fund / Sign / Finalize
+/// lifecycle without standing up a live regtest node + electrs.
+///
+/// The synthetic tx's input references a zero previous-outpoint; nothing
+/// in BDK or the walletrs handlers validates input lineage on funding
+/// (only the output side matters for our wallet's UTXO set), so this is
+/// safe for test purposes.
+pub async fn inject_unconfirmed_utxo(wallet_id: &str, value_sats: u64) -> String {
+    use bdk_wallet::bitcoin::absolute::LockTime;
+    use bdk_wallet::bitcoin::hashes::Hash;
+    use bdk_wallet::bitcoin::transaction::{Transaction, Version};
+    use bdk_wallet::bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, TxIn, TxOut, Txid, Witness};
+    use bdk_wallet::KeychainKind;
+
+    use crate::wallet::bdk::BdkWalletManager;
+
+    setup();
+    let network = crate::config::CONFIG.network();
+    let bdk_manager = BdkWalletManager::new(network);
+
+    let wallet_result = bdk_manager
+        .load_wallet(wallet_id)
+        .expect("inject_unconfirmed_utxo: wallet must exist");
+    let mut wallet = wallet_result.wallet;
+    let mut store = wallet_result.store;
+
+    let dest = wallet.reveal_next_address(KeychainKind::External);
+
+    let funding_tx = Transaction {
+        version: Version::TWO,
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint::new(Txid::all_zeros(), 0),
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+            witness: Witness::new(),
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(value_sats),
+            script_pubkey: dest.address.script_pubkey(),
+        }],
+    };
+    let txid = funding_tx.compute_txid().to_string();
+
+    // Timestamp is arbitrary; only relevant for conflict resolution
+    // between unconfirmed txs, which we don't exercise here.
+    wallet.apply_unconfirmed_txs([(funding_tx, 0u64)]);
+    wallet
+        .persist(&mut store)
+        .expect("inject_unconfirmed_utxo: persist must succeed");
+
+    txid
+}

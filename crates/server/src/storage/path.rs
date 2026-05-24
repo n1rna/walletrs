@@ -197,4 +197,73 @@ mod tests {
             "name_with_spaces"
         );
     }
+
+    // ---- property tests -------------------------------------------------
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Sanitization is *idempotent*: sanitize(sanitize(x)) == sanitize(x).
+        /// Catches regressions where adding a new replacement rule would
+        /// cause double-sanitization to drift.
+        #[test]
+        fn prop_sanitize_is_idempotent(s in ".*") {
+            if let Ok(once) = sanitize_path_component(&s) {
+                let twice = sanitize_path_component(&once)
+                    .expect("once-sanitized output must itself sanitize");
+                prop_assert_eq!(once, twice);
+            }
+        }
+
+        /// Any successful sanitization output must be safe for use as a path
+        /// component: no '/', '\\', or ".." sequence. The storage layer
+        /// concatenates sanitized values into filesystem paths; a leak of
+        /// any of these characters would enable directory traversal.
+        #[test]
+        fn prop_sanitize_output_has_no_path_escape_chars(s in ".*") {
+            if let Ok(out) = sanitize_path_component(&s) {
+                prop_assert!(!out.contains('/'), "output has '/': {:?}", out);
+                prop_assert!(!out.contains('\\'), "output has '\\\\': {:?}", out);
+                prop_assert!(!out.contains(".."), "output has '..': {:?}", out);
+            }
+        }
+
+        /// Any input containing '/', '\\', or ".." must be *rejected*, not
+        /// just rewritten — the function's contract is to fail loudly on
+        /// would-be path-traversal inputs so a buggy caller can't smuggle
+        /// them in.
+        ///
+        /// Note: `prop_oneof!` with `&str` arguments treats them as regex,
+        /// not literals — using `Just(...)` is the easiest way to feed
+        /// literal markers.
+        #[test]
+        fn prop_sanitize_rejects_traversal_inputs(
+            base in "[a-zA-Z0-9_-]{1,16}",
+            marker in prop_oneof![
+                Just("/".to_string()),
+                Just("\\".to_string()),
+                Just("..".to_string()),
+            ],
+        ) {
+            let bad = format!("{}{}", base, marker);
+            prop_assert!(
+                sanitize_path_component(&bad).is_err(),
+                "input {:?} containing {:?} must be rejected",
+                bad, marker
+            );
+        }
+
+        /// Strings that are *already* sanitized (i.e. only the allowed
+        /// alphabet, and no ".." sequence) must round-trip unchanged. The
+        /// `..` substring is rejected even when individual `.` characters
+        /// are in the allowed alphabet — that's the path-traversal guard.
+        #[test]
+        fn prop_sanitize_preserves_allowed_alphabet(
+            s in "[a-zA-Z0-9_\\-:.]{1,64}"
+        ) {
+            prop_assume!(!s.contains(".."));
+            let out = sanitize_path_component(&s).expect("allowed-alphabet input must sanitize");
+            prop_assert_eq!(out, s);
+        }
+    }
 }

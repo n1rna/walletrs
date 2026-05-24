@@ -1,0 +1,55 @@
+[package]
+name = "walletrs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+# Match the versions used by the main server crate so we exercise the
+# *same* parser code paths.
+bdk_wallet = { version = "1.1.0", features = ["file_store"] }
+miniscript = { version = "12.0", features = ["compiler"] }
+walletrs = { path = ".." }
+
+# Standalone workspace. The fuzz crate is deliberately excluded from the
+# root walletrs workspace (see ../../../Cargo.toml) so `cargo build` and
+# `cargo test` from the repo root never try to pull in libfuzzer-sys
+# (which requires nightly).
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "psbt"
+path = "fuzz_targets/psbt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "address"
+path = "fuzz_targets/address.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "descriptor"
+path = "fuzz_targets/descriptor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "miniscript_policy"
+path = "fuzz_targets/miniscript_policy.rs"
+test = false
+doc = false
+bench = false
