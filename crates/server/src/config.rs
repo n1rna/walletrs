@@ -1,6 +1,7 @@
 use bdk_wallet::bitcoin::Network;
 use once_cell::sync::Lazy;
 use std::env;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageKind {
@@ -155,8 +156,52 @@ pub fn parse_network_str(network_str: &str) -> Option<Network> {
     }
 }
 
-/// Global config instance
-pub static CONFIG: Lazy<Config> = Lazy::new(Config::new);
+/// Backing cell for the global `Config`. Tests can race to populate this
+/// via `__test_init_config` *before* any production code path calls
+/// `Config::new()`; the production path is the lazy `get_or_init` below.
+static CONFIG_CELL: OnceLock<Config> = OnceLock::new();
+
+/// Global config instance. Kept as a `Lazy<&'static Config>` so existing
+/// `CONFIG.foo()` call sites compile unchanged — `Lazy` derefs to `&&Config`
+/// which auto-derefs again to `&Config` for method calls. The actual storage
+/// lives in `CONFIG_CELL`, which tests can pre-seed.
+pub static CONFIG: Lazy<&'static Config> = Lazy::new(|| CONFIG_CELL.get_or_init(Config::new));
+
+/// Test-only: install a `Config` into the global cell before the production
+/// `Lazy` initializer runs. Returns `true` if this caller actually set the
+/// config, `false` if it was already set (by another test, or because some
+/// other call path already touched `CONFIG`). Tests should not rely on the
+/// boolean — use it to detect ordering bugs, not to gate behavior.
+///
+/// Pair this with `db::__test_init_storage_with_path` for a complete
+/// test-environment bootstrap.
+#[cfg(test)]
+pub fn __test_init_config(cfg: Config) -> bool {
+    CONFIG_CELL.set(cfg).is_ok()
+}
+
+#[cfg(test)]
+impl Config {
+    /// Build a minimal `Config` suitable for tests: local filesystem
+    /// storage rooted at `storage_base_path`, no S3, no KEK, no auth,
+    /// testnet by default. Tests that need different values should mutate
+    /// the returned struct before passing it to `__test_init_config`.
+    pub fn for_tests(storage_base_path: impl Into<String>) -> Self {
+        Self {
+            host: "127.0.0.1".into(),
+            port: 0,
+            http_port: 0,
+            electrs_url: "127.0.0.1:60401".into(),
+            bitcoin_network: "testnet".into(),
+            storage_base_path: storage_base_path.into(),
+            storage_kind: StorageKind::Local,
+            s3: None,
+            kek_b64: None,
+            auth_disabled: true,
+            auth_token: None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

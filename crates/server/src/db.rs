@@ -21,6 +21,26 @@ pub fn get_storage_manager() -> &'static StorageManager {
     })
 }
 
+/// Test-only: race to install a `StorageManager` backed by `base_path` into
+/// the global `STORAGE_MANAGER` before any production code path can lazily
+/// initialise it from `CONFIG.storage_base_path()`. Use this from tests
+/// that need real storage (e.g. exercising `build_wallet` end-to-end) so
+/// they neither depend on env-var ordering nor pollute the project's
+/// `./data` directory.
+///
+/// Idempotent: only the *first* caller in the process actually sets the
+/// manager; subsequent callers return the already-installed one. That
+/// matches the semantics tests need — one shared tempdir per process,
+/// tests use unique wallet ids to avoid collisions.
+#[cfg(test)]
+pub fn __test_init_storage_with_path(base_path: &str) -> &'static StorageManager {
+    let backend = crate::storage::AnyBackend::local(base_path);
+    let _ = STORAGE_MANAGER.set(StorageManager::new_with_backend(base_path, backend));
+    STORAGE_MANAGER
+        .get()
+        .expect("storage manager must be initialised after set")
+}
+
 // STORAGE INITIALIZATION
 
 pub fn init_all_storage() -> Result<(), std::io::Error> {
@@ -219,26 +239,21 @@ pub fn get_finalized_psbt(wallet_id: &str, txid: &str) -> Result<String, std::io
     }
 }
 
+/// List the signed PSBTs persisted for `(wallet_id, txid)`. Returns
+/// `Ok(vec![])` when nothing has been stored — matching the standard
+/// "list-query returns an empty list, not an error" convention. Callers
+/// (e.g. `finalize_wallet_transaction`) check `is_empty()` to decide
+/// whether finalization can proceed.
+///
+/// Earlier versions returned `NotFound` on empty; that made the handler's
+/// own `is_empty()` check dead code, and pushed an unusual "missing means
+/// error" semantic on what is fundamentally a list query.
 pub fn get_signed_psbts(
     wallet_id: &str,
     txid: &str,
 ) -> Result<Vec<StoredSignedPSBT>, std::io::Error> {
     let storage_manager = get_storage_manager();
-    let signed_psbts = StoredSignedPSBT::list_by_txid(storage_manager, wallet_id, txid)
-        .map_err(convert_storage_error)?;
-
-    if signed_psbts.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!(
-                "No signed PSBTs found for wallet {} and txid {}",
-                wallet_id, txid
-            ),
-        ));
-    }
-
-    // Convert to legacy format for backward compatibility
-    Ok(signed_psbts)
+    StoredSignedPSBT::list_by_txid(storage_manager, wallet_id, txid).map_err(convert_storage_error)
 }
 
 // New unified PSBT operations

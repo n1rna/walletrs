@@ -14,7 +14,7 @@ use crate::wallet::signer::{
     add_signers_for_psbt, resolve_policy_path_from_leaf, sign_psbt_with_taproot_support,
 };
 use crate::LianaDescriptor;
-use bdk_wallet::bitcoin::{Address as BitcoinAddress, Psbt};
+use bdk_wallet::bitcoin::{Address as BitcoinAddress, Network, Psbt};
 use bdk_wallet::chain::ChainPosition;
 use bdk_wallet::KeychainKind;
 use hex;
@@ -27,12 +27,89 @@ use wallet_runtime::ElectrumClient;
 
 /// Load the persisted policy descriptor for a wallet. Returns `None` for
 /// flat wallets (single-sig, plain multisig, taproot multisig with NUMS
-/// internal key) and for wallets whose stored value is missing or unparseable.
+/// internal key) and for wallets whose stored value is missing.
+///
+/// A *parse* failure is also folded into `None` so flat-wallet code paths
+/// continue to work, but emits a `warn!` so descriptor corruption is
+/// observable rather than silent.
 fn load_policy_descriptor(wallet_id: &str) -> Option<LianaDescriptor> {
-    db::get_policy_descriptor(wallet_id)
-        .ok()
-        .flatten()
-        .and_then(|s| LianaDescriptor::from_str(&s).ok())
+    let stored = match db::get_policy_descriptor(wallet_id) {
+        Ok(opt) => opt?,
+        Err(e) => {
+            log::warn!(
+                "load_policy_descriptor({}): storage read failed: {}",
+                wallet_id,
+                e
+            );
+            return None;
+        }
+    };
+    match LianaDescriptor::from_str(&stored) {
+        Ok(d) => Some(d),
+        Err(e) => {
+            log::warn!(
+                "load_policy_descriptor({}): stored descriptor failed to parse: {}",
+                wallet_id,
+                e
+            );
+            None
+        }
+    }
+}
+
+/// Parse a user-supplied destination address and confirm it belongs to
+/// `network`. Both failures translate to `Status::invalid_argument` so the
+/// caller (and ultimately the gRPC client) never sees a panic on malformed
+/// or wrong-network user input.
+pub(crate) fn parse_destination_address(
+    address_str: &str,
+    network: Network,
+) -> Result<BitcoinAddress, Status> {
+    let unchecked = BitcoinAddress::from_str(address_str).map_err(|e| {
+        Status::invalid_argument(format!(
+            "Invalid destination address {:?}: {}",
+            address_str, e
+        ))
+    })?;
+    unchecked.require_network(network).map_err(|e| {
+        Status::invalid_argument(format!(
+            "Destination address does not belong to network {}: {}",
+            network, e
+        ))
+    })
+}
+
+/// Parse a PSBT string that was loaded from storage. Any parse failure here
+/// is a corruption / invariant violation in the storage layer — never a
+/// caller error — so it surfaces as `Status::internal`.
+pub(crate) fn parse_stored_psbt(
+    wallet_id: &str,
+    txid: &str,
+    psbt_str: &str,
+) -> Result<Psbt, Status> {
+    Psbt::from_str(psbt_str).map_err(|e| {
+        log::error!(
+            "stored PSBT failed to parse for wallet {} txid {}: {}",
+            wallet_id,
+            txid,
+            e
+        );
+        Status::internal(format!(
+            "Stored PSBT for txid {} is unparseable; storage may be corrupted",
+            txid
+        ))
+    })
+}
+
+/// Translate a storage-layer `io::Error` from a PSBT lookup into the right
+/// gRPC status code: `NotFound` for missing rows, `Internal` for everything
+/// else.
+fn map_psbt_lookup_error(err: std::io::Error, what: &str) -> Status {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        Status::not_found(format!("{}: {}", what, err))
+    } else {
+        Status::internal(format!("{}: {}", what, err))
+    }
 }
 
 pub async fn get_wallet_transactions(
@@ -153,7 +230,7 @@ pub async fn get_wallet_utxos(
             // Sync the wallet
             let utxos: Vec<Utxo> = wallet
                 .list_unspent()
-                .map(|txo| {
+                .filter_map(|txo| {
                     let block_height = match txo.chain_position {
                         ChainPosition::Confirmed { anchor, .. } => anchor.block_id.height,
                         _ => 0,
@@ -164,9 +241,22 @@ pub async fn get_wallet_utxos(
                         _ => "".to_string(),
                     };
 
-                    let utxo = wallet.get_utxo(txo.outpoint).unwrap();
+                    let utxo = match wallet.get_utxo(txo.outpoint) {
+                        Some(u) => u,
+                        None => {
+                            // Invariant violation: list_unspent yielded an outpoint
+                            // the wallet doesn't recognise. Log and skip rather
+                            // than crash the whole RPC.
+                            log::warn!(
+                                "list_unspent yielded outpoint {} that wallet.get_utxo \
+                                 cannot resolve; skipping",
+                                txo.outpoint
+                            );
+                            return None;
+                        }
+                    };
 
-                    Utxo {
+                    Some(Utxo {
                         txid: txo.outpoint.txid.to_string(),
                         vout: txo.outpoint.vout,
                         address: wallet
@@ -177,9 +267,9 @@ pub async fn get_wallet_utxos(
                         script: txo.txout.script_pubkey.to_string(),
                         spent: utxo.is_spent,
                         script_type: "".to_string(),
-                        block_height: block_height,
-                        block_hash: block_hash,
-                    }
+                        block_height,
+                        block_hash,
+                    })
                 })
                 .collect();
 
@@ -200,13 +290,14 @@ pub async fn fund_wallet_transaction(
     match bdk_manager.load_wallet(&req.wallet_id) {
         Ok(wallet_result) => {
             let (mut wallet, mut _db) = (wallet_result.wallet, wallet_result.store);
-            let destination_address = BitcoinAddress::from_str(&req.destination_address)
-                .unwrap()
-                .require_network(CONFIG.network())
-                .unwrap();
+            let destination_address =
+                parse_destination_address(&req.destination_address, CONFIG.network())?;
 
             let send_amount = bdk_wallet::bitcoin::Amount::from_sat(req.destination_value);
-            let fee_rate = bdk_wallet::bitcoin::FeeRate::from_sat_per_vb(2).unwrap();
+            // 2 sat/vB is a hard-coded constant well within FeeRate's accepted range;
+            // the unwrap is genuinely infallible.
+            let fee_rate = bdk_wallet::bitcoin::FeeRate::from_sat_per_vb(2)
+                .expect("FeeRate::from_sat_per_vb(2) is infallible for this constant");
 
             let policy_path = if !req.selected_leaf_hash.is_empty() {
                 log::debug!("Selected leaf hash: {}", req.selected_leaf_hash);
@@ -291,7 +382,9 @@ pub async fn fund_wallet_transaction(
                 }
             };
 
-            wallet.persist(&mut _db).unwrap();
+            wallet
+                .persist(&mut _db)
+                .map_err(|e| Status::internal(format!("Failed to persist wallet: {}", e)))?;
 
             // Use the new PSBT storage function
             db::save_psbt(
@@ -299,7 +392,7 @@ pub async fn fund_wallet_transaction(
                 &psbt.unsigned_tx.compute_txid().to_string(),
                 &psbt.to_string(),
             )
-            .unwrap();
+            .map_err(|e| Status::internal(format!("Failed to save PSBT: {}", e)))?;
 
             Ok(Response::new(FundWalletTransactionResponse {
                 txid: psbt.unsigned_tx.compute_txid().to_string(),
@@ -308,7 +401,16 @@ pub async fn fund_wallet_transaction(
                 input_total: psbt
                     .inputs
                     .iter()
-                    .map(|input| input.witness_utxo.as_ref().unwrap().value.to_sat())
+                    .map(|input| {
+                        // witness_utxo is None for legacy (pre-segwit) inputs.
+                        // We default to 0 instead of panicking; the total will
+                        // be visibly off in that case, which is the right signal.
+                        input
+                            .witness_utxo
+                            .as_ref()
+                            .map(|wu| wu.value.to_sat())
+                            .unwrap_or(0)
+                    })
                     .sum(),
                 output_total: psbt
                     .unsigned_tx
@@ -327,15 +429,31 @@ pub async fn fund_wallet_transaction(
                     .input
                     .iter()
                     .map(|input| {
-                        let utxo = wallet.get_utxo(input.previous_output).unwrap();
+                        // PSBT inputs we just built from this wallet should
+                        // resolve; if not, fall back to empty-value/address
+                        // rather than crash the RPC.
+                        let utxo = wallet.get_utxo(input.previous_output);
+                        let (value, address) = match utxo {
+                            Some(u) => (
+                                u.txout.value.to_sat(),
+                                wallet
+                                    .peek_address(u.keychain, u.derivation_index)
+                                    .address
+                                    .to_string(),
+                            ),
+                            None => {
+                                log::warn!(
+                                    "PSBT input {} not found in wallet UTXOs; returning empty",
+                                    input.previous_output
+                                );
+                                (0, String::new())
+                            }
+                        };
                         TransactionInput {
                             prev_vout: input.previous_output.vout,
                             prev_txid: input.previous_output.txid.to_string(),
-                            value: utxo.txout.value.to_sat(),
-                            address: wallet
-                                .peek_address(utxo.keychain, utxo.derivation_index)
-                                .address
-                                .to_string(),
+                            value,
+                            address,
                             is_mine: true,
                             script: hex::encode(&input.script_sig),
                             script_type: "".to_string(),
@@ -394,7 +512,7 @@ pub async fn add_verify_transaction_signature(
                 &signed_psbt.to_string(),
                 &req.devicefingerprint,
             )
-            .unwrap();
+            .map_err(|e| Status::internal(format!("Failed to save signed PSBT: {}", e)))?;
 
             Ok(Response::new(AddVerifyTransactionSignatureResponse {
                 txid: req.txid,
@@ -429,9 +547,8 @@ pub async fn finalize_wallet_transaction(
             }
 
             let base_psbt_str = db::get_original_psbt(&req.wallet_id, &req.txid)
-                .map_err(|e| Status::internal(format!("Failed to get original PSBT: {:?}", e)))?;
-            let mut base_psbt = Psbt::from_str(&base_psbt_str)
-                .map_err(|e| Status::internal(format!("Failed to parse base PSBT: {:?}", e)))?;
+                .map_err(|e| map_psbt_lookup_error(e, "Original PSBT lookup failed"))?;
+            let mut base_psbt = parse_stored_psbt(&req.wallet_id, &req.txid, &base_psbt_str)?;
             // Merge all signed PSBTs into the base PSBT
             log::info!(
                 "Combining {} signed PSBTs from devices: {:?}",
@@ -441,10 +558,8 @@ pub async fn finalize_wallet_transaction(
                     .map(|s| &s.device_fingerprint)
                     .collect::<Vec<_>>()
             );
-            for psbt in signed_psbts
-                .iter()
-                .map(|s| Psbt::from_str(&s.psbt_data).unwrap())
-            {
+            for stored in signed_psbts.iter() {
+                let psbt = parse_stored_psbt(&req.wallet_id, &req.txid, &stored.psbt_data)?;
                 base_psbt
                     .combine(psbt)
                     .map_err(|e| Status::internal(format!("Failed to merge PSBTs: {:?}", e)))?;
@@ -575,9 +690,10 @@ pub async fn sign_wallet_transaction(
     match bdk_manager.load_wallet(&req.wallet_id) {
         Ok(wallet_result) => {
             let (mut wallet, mut _db) = (wallet_result.wallet, wallet_result.store);
-            // Use the new PSBT retrieval function
-            let psbt_str = db::get_original_psbt(&req.wallet_id, &req.txid).unwrap();
-            let mut psbt = Psbt::from_str(&psbt_str).unwrap();
+            // Load the unsigned PSBT we previously persisted in fund_wallet_transaction.
+            let psbt_str = db::get_original_psbt(&req.wallet_id, &req.txid)
+                .map_err(|e| map_psbt_lookup_error(e, "Original PSBT lookup failed"))?;
+            let mut psbt = parse_stored_psbt(&req.wallet_id, &req.txid, &psbt_str)?;
 
             // Add signers on-demand based on the UTXOs being spent
             // Use the specific device_id from the request for signing
@@ -625,7 +741,7 @@ pub async fn sign_wallet_transaction(
                 &signed_psbt.to_string(),
                 &req.device_id,
             )
-            .unwrap();
+            .map_err(|e| Status::internal(format!("Failed to save signed PSBT: {}", e)))?;
 
             Ok(Response::new(SignWalletTransactionResponse {
                 txid: psbt_txid,
@@ -688,5 +804,119 @@ pub async fn broadcast_wallet_transaction(
             }))
         }
         Err(_) => Err(Status::not_found("Wallet not found")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tonic::Code;
+
+    // ---- parse_destination_address ---------------------------------------
+
+    #[test]
+    fn parse_destination_address_rejects_garbage() {
+        let err = parse_destination_address("not-an-address", Network::Regtest)
+            .expect_err("garbage must not parse");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(
+            err.message().contains("Invalid destination address"),
+            "message should describe the failure, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn parse_destination_address_rejects_empty_string() {
+        let err = parse_destination_address("", Network::Regtest)
+            .expect_err("empty address must not parse");
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[test]
+    fn parse_destination_address_rejects_wrong_network() {
+        // A real signet/testnet bech32 address — should be rejected on mainnet.
+        let testnet_addr = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
+        let err = parse_destination_address(testnet_addr, Network::Bitcoin)
+            .expect_err("testnet address must be rejected on mainnet");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(
+            err.message().contains("network"),
+            "message should mention network mismatch, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn parse_destination_address_accepts_matching_network() {
+        // Same testnet address — should now be accepted on testnet.
+        let testnet_addr = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
+        let addr = parse_destination_address(testnet_addr, Network::Testnet)
+            .expect("testnet address parses on testnet");
+        assert_eq!(addr.to_string(), testnet_addr);
+    }
+
+    #[test]
+    fn parse_destination_address_rejects_address_with_invalid_checksum() {
+        // Mutate last char to break the bech32 checksum.
+        let bad = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsy";
+        let err = parse_destination_address(bad, Network::Testnet)
+            .expect_err("bad checksum must not parse");
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    // ---- parse_stored_psbt ----------------------------------------------
+
+    #[test]
+    fn parse_stored_psbt_rejects_garbage_as_internal() {
+        let err = parse_stored_psbt("w1", "tx1", "totally not a psbt")
+            .expect_err("garbage PSBT must not parse");
+        assert_eq!(err.code(), Code::Internal);
+        assert!(
+            err.message().contains("Stored PSBT"),
+            "message should flag the storage layer, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn parse_stored_psbt_rejects_empty_string_as_internal() {
+        let err = parse_stored_psbt("w1", "tx1", "").expect_err("empty stored PSBT must not parse");
+        assert_eq!(err.code(), Code::Internal);
+    }
+
+    #[test]
+    fn parse_stored_psbt_rejects_truncated_base64_as_internal() {
+        // Looks plausible — starts with the PSBT magic in base64 — but
+        // is truncated mid-message. The point: any parse failure for stored
+        // bytes must be Internal, never InvalidArgument (caller is innocent).
+        let err = parse_stored_psbt("w1", "tx1", "cHNidP8BAH4CAAAAA")
+            .expect_err("truncated PSBT must not parse");
+        assert_eq!(err.code(), Code::Internal);
+    }
+
+    // ---- map_psbt_lookup_error ------------------------------------------
+
+    #[test]
+    fn map_psbt_lookup_error_translates_notfound() {
+        let err = std::io::Error::new(std::io::ErrorKind::NotFound, "no such psbt");
+        let status = map_psbt_lookup_error(err, "Original PSBT lookup failed");
+        assert_eq!(status.code(), Code::NotFound);
+        assert!(status.message().contains("Original PSBT lookup failed"));
+    }
+
+    #[test]
+    fn map_psbt_lookup_error_translates_other_as_internal() {
+        let err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let status = map_psbt_lookup_error(err, "PSBT lookup failed");
+        assert_eq!(status.code(), Code::Internal);
+    }
+
+    #[test]
+    fn map_psbt_lookup_error_translates_other_io_error_as_internal() {
+        let err = std::io::Error::other("disk fell over");
+        let status = map_psbt_lookup_error(err, "Original PSBT lookup failed");
+        assert_eq!(status.code(), Code::Internal);
+        assert!(status.message().contains("disk fell over"));
     }
 }
