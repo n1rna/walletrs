@@ -1,0 +1,104 @@
+name: Nightly fuzz
+
+# Run each fuzz target for a time-boxed budget on a schedule. Separate
+# workflow from CI so PRs aren't gated on fuzz runs (those would be
+# multi-minute) — instead the gate is `fuzz-check` in `ci.yml` which
+# verifies the targets compile.
+#
+# When a crash is found:
+#   1. The job exits non-zero, so the workflow shows red on the
+#      Actions tab.
+#   2. The reproducer file (`fuzz/artifacts/<target>/crash-<hash>`) is
+#      uploaded as an artifact for triage.
+
+on:
+  schedule:
+    # 04:00 UTC daily. Single time-of-day rather than every-PR keeps
+    # CI costs predictable while still giving every parser overnight
+    # coverage-guided exploration.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      max_total_time:
+        description: "Per-target max fuzz time (seconds)"
+        default: "600"
+        required: false
+
+# Don't pile up runs — if a previous nightly is still going, cancel it.
+# Manual triggers via workflow_dispatch never auto-cancel.
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'schedule' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # 10 min per target for scheduled runs. Manual triggers honor the
+  # workflow_dispatch input.
+  MAX_TIME: ${{ github.event.inputs.max_total_time || '600' }}
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    # Wall-clock cap one minute over MAX_TIME so a stuck instrumentation
+    # build doesn't burn CI budget.
+    timeout-minutes: 15
+    strategy:
+      # Don't cancel sibling targets on a single crash — we want as much
+      # nightly coverage as the matrix can give us.
+      fail-fast: false
+      matrix:
+        target: [psbt, address, descriptor, miniscript_policy]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      # `cargo install cargo-fuzz` is ~1 min on a cold cache. The
+      # binary is small and stable enough that we don't bother
+      # caching it explicitly.
+      - name: install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/server/fuzz
+
+      - name: install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
+
+      - name: fuzz ${{ matrix.target }} for ${{ env.MAX_TIME }}s
+        working-directory: crates/server/fuzz
+        run: |
+          # `-jobs=1 -workers=1` keeps output linear and the artifact
+          # tree predictable. The seed corpus in `fuzz/corpus/<target>/`
+          # is auto-detected by cargo-fuzz.
+          cargo fuzz run ${{ matrix.target }} \
+            -- -max_total_time=${{ env.MAX_TIME }} \
+               -jobs=1 \
+               -workers=1
+
+      - name: upload crash reproducers
+        # Run on failure so a crash artifact still gets out the door.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ matrix.target }}-${{ github.run_id }}
+          path: |
+            crates/server/fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+
+      - name: upload expanded corpus
+        # On success, save the corpus libFuzzer has grown so the next
+        # run starts where this one left off. Best-effort — the
+        # workflow doesn't fail if upload-artifact bails.
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          path: |
+            crates/server/fuzz/corpus/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 7

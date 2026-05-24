@@ -39,11 +39,40 @@ When a crash is found, libFuzzer writes a reproducer file to
 cargo +nightly fuzz run psbt fuzz/artifacts/psbt/crash-<hash>
 ```
 
+## Seed corpora
+
+Each target ships with a small hand-curated seed corpus under
+`fuzz/corpus/<target>/`. Inputs range from "just the magic prefix"
+to "small valid example" — enough to give libFuzzer's coverage-guided
+mutator a head start on each parser's interesting code paths.
+
+Adding new seeds is just a matter of dropping a file in the right
+directory. Use one-input-per-file; no extension is needed. Keep
+seeds short — libFuzzer mutates from them, so larger isn't better.
+
+When the nightly workflow grows the corpus (via libFuzzer's
+coverage-guided synthesis), the expanded set is uploaded as an
+artifact (`fuzz-corpus-<target>-<run_id>`) and retained for 7 days
+so it can be downloaded and committed if particularly interesting
+inputs surface.
+
 ## CI
 
-The root workflow runs `cargo check` on this crate (compilation only) so
-the targets don't bit-rot. Actual fuzz runs are not part of CI by default
-— they are intended for periodic local / nightly runs.
+Two workflows:
+
+- **`ci.yml`** (`fuzz-check` job) runs `cargo check --bins` against
+  this crate on every PR using the nightly toolchain. This catches
+  bit-rot in the target definitions without paying for an actual
+  fuzz run on every PR.
+- **`fuzz.yml`** runs every fuzz target for ~10 minutes nightly
+  (04:00 UTC) on a `cron` schedule, and also via the Actions UI
+  "Run workflow" button (`workflow_dispatch`). Crashes are
+  surfaced as red workflow status plus an uploaded reproducer
+  artifact. To trigger a longer ad-hoc fuzz run:
+
+  ```text
+  Actions → Nightly fuzz → Run workflow → max_total_time: 3600
+  ```
 
 ## Adding a target
 
