@@ -23,6 +23,27 @@ use wallet_runtime::{
 use crate::db;
 use crate::LianaDescriptor;
 
+/// Parse the 8-hex-character fingerprint that was persisted for a managed
+/// key. A failure here is *storage corruption* (a real managed key always
+/// has a valid fingerprint), not caller error, so it surfaces as
+/// `Status::internal` and includes the device id so operators can find
+/// the offending row.
+///
+/// The previous code did `unwrap_or_default()` which silently substituted
+/// the zero fingerprint, causing the signer to pick the wrong derivations
+/// for taproot inputs. See the regression test in this module.
+pub(crate) fn parse_stored_fingerprint(
+    fingerprint_hex: &str,
+    device_id: &str,
+) -> Result<Fingerprint, Status> {
+    Fingerprint::from_str(fingerprint_hex).map_err(|e| {
+        Status::internal(format!(
+            "Stored fingerprint {:?} for device {} is unparseable: {}",
+            fingerprint_hex, device_id, e
+        ))
+    })
+}
+
 /// Look up the system managed key for `device_id`, analyse the PSBT to find
 /// which derivations + signer kind the device needs, and register one signer
 /// per required derivation. Returns the count of signers added.
@@ -56,7 +77,7 @@ pub fn add_signers_for_psbt(
         )));
     }
 
-    let device_fp = Fingerprint::from_str(&key.fingerprint).unwrap_or_default();
+    let device_fp = parse_stored_fingerprint(&key.fingerprint, &key.device_id)?;
     let mut analysis: PsbtSignerAnalysis = analyze_for_signing(wallet, psbt, &device_fp);
 
     if analysis.has_taproot_inputs && !analysis.device_in_tap_origins {
@@ -322,14 +343,223 @@ mod tests {
     fn unknown_leaf_returns_invalid_argument() {
         let (wallet, policy_desc, _) = build_timelocked_wallet();
         let result = resolve_policy_path_from_leaf(&wallet, "deadbeef", Some(&policy_desc));
-        assert!(result.is_err());
+        let err = result.expect_err("unknown leaf must error");
+        assert_eq!(
+            err.code(),
+            tonic::Code::InvalidArgument,
+            "unknown leaf should be InvalidArgument, got: {:?} ({})",
+            err.code(),
+            err.message()
+        );
     }
 
     #[test]
-    fn hex_leaf_without_descriptor_errors() {
+    fn hex_leaf_without_descriptor_returns_invalid_argument() {
         let (wallet, _, leaves) = build_timelocked_wallet();
         let any_leaf = &leaves[0].leaf_hash;
-        let result = resolve_policy_path_from_leaf(&wallet, any_leaf, None);
-        assert!(result.is_err(), "hex leaf without descriptor must error");
+        let err = resolve_policy_path_from_leaf(&wallet, any_leaf, None)
+            .expect_err("hex leaf without descriptor must error");
+        // The wrapper specifically maps the "no policy descriptor" case to
+        // InvalidArgument (caller forgot to provide it), not Internal.
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    // ---- broader leaf-resolution coverage --------------------------------
+
+    #[test]
+    fn resolve_policy_path_resolves_every_leaf_in_timelocked_wallet() {
+        // Invariant: every leaf surfaced by taproot::extract must round-trip
+        // through resolve_policy_path_from_leaf. If this ever fails, the
+        // taproot metadata is out of sync with the descriptor's policy
+        // indexing — which would silently break spending.
+        let (wallet, policy_desc, leaves) = build_timelocked_wallet();
+        assert!(
+            leaves.len() >= 2,
+            "timelocked wallet should expose >=2 leaves, got {}",
+            leaves.len()
+        );
+
+        for leaf in &leaves {
+            let resolved =
+                resolve_policy_path_from_leaf(&wallet, &leaf.leaf_hash, Some(&policy_desc))
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "leaf {:?} (cond {:?}) failed to resolve: {} ({:?})",
+                            leaf.leaf_hash,
+                            leaf.spending_condition_id,
+                            e.message(),
+                            e.code()
+                        )
+                    });
+            assert!(
+                !resolved.is_empty(),
+                "leaf {:?} resolved to empty path map",
+                leaf.leaf_hash
+            );
+            for (keychain_key, path) in &resolved {
+                assert!(
+                    !path.is_empty(),
+                    "resolved policy path for keychain {} is empty",
+                    keychain_key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_policy_path_rejects_empty_leaf_hash() {
+        // Empty input should never be treated as a valid leaf hash — must
+        // surface as an error rather than e.g. silently matching index 0.
+        let (wallet, policy_desc, _) = build_timelocked_wallet();
+        let result = resolve_policy_path_from_leaf(&wallet, "", Some(&policy_desc));
+        assert!(
+            result.is_err(),
+            "empty leaf hash must error, got Ok({:?})",
+            result.ok()
+        );
+    }
+
+    #[test]
+    fn resolve_policy_path_rejects_garbage_non_hex() {
+        let (wallet, policy_desc, _) = build_timelocked_wallet();
+        let result =
+            resolve_policy_path_from_leaf(&wallet, "totally-not-a-leaf", Some(&policy_desc));
+        let err = result.expect_err("non-hex leaf must error");
+        // Could surface as InvalidArgument (parse failed → no matching path)
+        // or Internal (wallet_runtime error). Either is OK; what we're
+        // asserting is "no panic, returns a typed Status".
+        assert!(matches!(
+            err.code(),
+            tonic::Code::InvalidArgument | tonic::Code::Internal
+        ));
+    }
+
+    #[test]
+    fn resolve_policy_path_primary_and_recovery_paths_differ() {
+        // The primary leaf maps to spending-path [0]; the recovery leaf
+        // maps to [1]. If these ever collide, finalization would pick the
+        // wrong branch.
+        let (wallet, policy_desc, leaves) = build_timelocked_wallet();
+        let primary = leaves
+            .iter()
+            .find(|l| l.spending_condition_id == "primary")
+            .expect("primary leaf");
+        let recovery = leaves
+            .iter()
+            .find(|l| l.spending_condition_id == "recovery")
+            .expect("recovery leaf");
+
+        let p_resolved =
+            resolve_policy_path_from_leaf(&wallet, &primary.leaf_hash, Some(&policy_desc))
+                .expect("primary resolves");
+        let r_resolved =
+            resolve_policy_path_from_leaf(&wallet, &recovery.leaf_hash, Some(&policy_desc))
+                .expect("recovery resolves");
+
+        let p_path = p_resolved.values().next().expect("primary path");
+        let r_path = r_resolved.values().next().expect("recovery path");
+        assert_ne!(
+            p_path, r_path,
+            "primary and recovery must resolve to distinct policy paths, both got {:?}",
+            p_path
+        );
+    }
+
+    // ---- add_signers_for_psbt guard tests --------------------------------
+
+    fn make_empty_psbt() -> Psbt {
+        // Construct a minimum-viable PSBT (empty inputs + outputs) so we
+        // can exercise add_signers_for_psbt's pre-DB guard checks without
+        // having to mock the full wallet+UTXO graph.
+        use bdk_wallet::bitcoin::absolute::LockTime;
+        use bdk_wallet::bitcoin::transaction::{Transaction, Version};
+
+        let tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+        Psbt::from_unsigned_tx(tx).expect("empty PSBT is valid")
+    }
+
+    #[test]
+    fn add_signers_rejects_empty_device_id() {
+        // This is the first guard in add_signers_for_psbt and runs before
+        // any DB access — so we can test it without storage init.
+        let (mut wallet, _, _) = build_timelocked_wallet();
+        let psbt = make_empty_psbt();
+        let err = add_signers_for_psbt(&mut wallet, &psbt, "test-wallet", "")
+            .expect_err("empty device_id must be rejected");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().to_lowercase().contains("device"),
+            "error should mention the device id, got: {}",
+            err.message()
+        );
+    }
+
+    // ---- parse_stored_fingerprint regressions --------------------------
+
+    #[test]
+    fn parse_stored_fingerprint_accepts_valid_hex() {
+        let fp =
+            parse_stored_fingerprint("d34db33f", "dev-1").expect("valid 8-hex fingerprint parses");
+        // Compare via debug repr to avoid pulling in Fingerprint comparisons.
+        assert_eq!(format!("{}", fp), "d34db33f");
+    }
+
+    #[test]
+    fn parse_stored_fingerprint_rejects_garbage() {
+        let err = parse_stored_fingerprint("not-hex!!", "dev-1")
+            .expect_err("non-hex fingerprint must not parse");
+        assert_eq!(err.code(), tonic::Code::Internal);
+        assert!(
+            err.message().contains("dev-1"),
+            "error message must include the device id for triage, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("not-hex!!"),
+            "error message must include the offending value, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn parse_stored_fingerprint_rejects_wrong_length() {
+        // Fingerprints are exactly 4 bytes (8 hex chars).
+        let err =
+            parse_stored_fingerprint("ab", "dev-2").expect_err("short fingerprint must not parse");
+        assert_eq!(err.code(), tonic::Code::Internal);
+    }
+
+    #[test]
+    fn parse_stored_fingerprint_rejects_empty_string() {
+        // Regression for the prior `unwrap_or_default()` behavior: empty
+        // string used to silently become the zero fingerprint.
+        let err = parse_stored_fingerprint("", "dev-3")
+            .expect_err("empty fingerprint must not silently default to zero");
+        assert_eq!(err.code(), tonic::Code::Internal);
+    }
+
+    #[test]
+    fn parse_stored_fingerprint_does_not_silently_substitute_zero() {
+        // Make absolutely sure we do NOT return the zero fingerprint on bad
+        // input. This was the actual production bug.
+        let bad_inputs = [
+            "",
+            "0",
+            "00000000zz",
+            "deadbeefdeadbeef", // too long
+            "xyzwxyzw",
+        ];
+        for bad in bad_inputs {
+            assert!(
+                parse_stored_fingerprint(bad, "dev").is_err(),
+                "input {:?} must be rejected, not silently coerced to zero",
+                bad
+            );
+        }
     }
 }

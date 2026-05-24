@@ -103,7 +103,9 @@ pub async fn reveal_next_address(
                 }
                 let key_info = wallet.reveal_next_address(keychain_kind);
 
-                wallet.persist(&mut _db).expect("Failed to persist wallet");
+                wallet
+                    .persist(&mut _db)
+                    .map_err(|e| Status::internal(format!("Failed to persist wallet: {}", e)))?;
 
                 debug!("Revealed address: {}", key_info.address);
                 trace!("Derivation path: {}", key_info.index);

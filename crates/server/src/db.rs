@@ -21,6 +21,26 @@ pub fn get_storage_manager() -> &'static StorageManager {
     })
 }
 
+/// Test-only: race to install a `StorageManager` backed by `base_path` into
+/// the global `STORAGE_MANAGER` before any production code path can lazily
+/// initialise it from `CONFIG.storage_base_path()`. Use this from tests
+/// that need real storage (e.g. exercising `build_wallet` end-to-end) so
+/// they neither depend on env-var ordering nor pollute the project's
+/// `./data` directory.
+///
+/// Idempotent: only the *first* caller in the process actually sets the
+/// manager; subsequent callers return the already-installed one. That
+/// matches the semantics tests need — one shared tempdir per process,
+/// tests use unique wallet ids to avoid collisions.
+#[cfg(test)]
+pub fn __test_init_storage_with_path(base_path: &str) -> &'static StorageManager {
+    let backend = crate::storage::AnyBackend::local(base_path);
+    let _ = STORAGE_MANAGER.set(StorageManager::new_with_backend(base_path, backend));
+    STORAGE_MANAGER
+        .get()
+        .expect("storage manager must be initialised after set")
+}
+
 // STORAGE INITIALIZATION
 
 pub fn init_all_storage() -> Result<(), std::io::Error> {
