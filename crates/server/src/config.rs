@@ -80,17 +80,37 @@ impl Config {
             .unwrap_or(8080);
         let host = env::var("WALLETRS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
+        // In test builds, give CONFIG fields safe defaults even when env
+        // vars aren't set. This is a belt-and-braces alongside
+        // `__test_init_config`: if some test code path triggers
+        // `CONFIG.foo()` before `test_support::setup()` had a chance to
+        // pre-seed CONFIG, we still end up with a usable KEK and a
+        // testnet network. Production builds are unaffected.
+        let kek_b64 = env::var("WALLETRS_KEK").ok();
+        #[cfg(test)]
+        let kek_b64 = kek_b64.or_else(|| {
+            // 32 zero bytes, base64-encoded. Tests don't rely on the value,
+            // only on it satisfying `EnvelopeCipher::from_base64`'s
+            // length check.
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string())
+        });
+
+        #[cfg(test)]
+        let bitcoin_network = env::var("BITCOIN_NETWORK").unwrap_or_else(|_| "testnet".to_string());
+        #[cfg(not(test))]
+        let bitcoin_network = env::var("BITCOIN_NETWORK").unwrap_or_else(|_| "regtest".to_string());
+
         Self {
             host,
             port,
             http_port,
             electrs_url: env::var("ELECTRS_URL").unwrap_or_else(|_| "127.0.0.1:60401".to_string()),
-            bitcoin_network: env::var("BITCOIN_NETWORK").unwrap_or_else(|_| "regtest".to_string()),
+            bitcoin_network,
             storage_base_path: env::var("WALLETRS_STORAGE_PATH")
                 .unwrap_or_else(|_| "./data".to_string()),
             storage_kind,
             s3,
-            kek_b64: env::var("WALLETRS_KEK").ok(),
+            kek_b64,
             auth_disabled,
             auth_token,
         }

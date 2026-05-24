@@ -1,7 +1,33 @@
 use crate::storage::traits::StorageBackend;
 use crate::storage::{StorageError, StorageResult};
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Process-wide registry of mutexes keyed by absolute index path.
+/// Different `FileSystemStorage` instances pointing at the same model+scope
+/// share the same mutex, so the read-modify-write cycle on the JSON index
+/// file is serialised even when the storage instances were constructed
+/// independently (which is what happens for every `db::store_*` call —
+/// `storage_manager.<model>()` returns a fresh instance).
+///
+/// Mirrors the per-wallet locking pattern in
+/// `wallet::bdk::wallet_manager::WALLET_LOCKS`.
+static INDEX_LOCKS: Lazy<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Acquire (or create) the process-wide lock for the index file at `path`.
+/// The returned `Arc<Mutex<()>>` lives as long as the lock is needed; the
+/// underlying entry is kept in the registry for reuse by future callers.
+pub fn index_path_lock(path: &str) -> Arc<Mutex<()>> {
+    let mut registry = INDEX_LOCKS.lock();
+    registry
+        .entry(path.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexCache {

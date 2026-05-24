@@ -113,6 +113,10 @@ where
     scope: ScopeType,
     model_name: String,
     index_manager: Arc<Mutex<IndexManager<B>>>,
+    /// Absolute path of the index JSON on disk. Stored so the
+    /// cross-instance index lock (see `crate::storage::index::index_path_lock`)
+    /// can be acquired without re-asking the path strategy on every call.
+    index_path: String,
     _phantom: std::marker::PhantomData<T>,
 }
 
@@ -129,7 +133,10 @@ where
         model_name: &str,
     ) -> StorageResult<Self> {
         let index_path = path_strategy.generate_index_path(&scope, model_name)?;
-        let index_manager = Arc::new(Mutex::new(IndexManager::new(backend.clone(), index_path)));
+        let index_manager = Arc::new(Mutex::new(IndexManager::new(
+            backend.clone(),
+            index_path.clone(),
+        )));
 
         Ok(Self {
             backend,
@@ -137,6 +144,7 @@ where
             scope,
             model_name: model_name.to_string(),
             index_manager,
+            index_path,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -157,6 +165,13 @@ where
         let json_data = serde_json::to_string_pretty(item)?;
 
         self.backend.write_bytes(&path, json_data.as_bytes())?;
+
+        // Process-wide index lock — see comment on `index_path_lock`. Without
+        // this, two concurrent `store` calls (e.g. two simultaneous gRPC
+        // requests) racing on the same model+scope can silently lose entries
+        // because each call does a read-modify-write on `index.json`.
+        let process_lock = crate::storage::index::index_path_lock(&self.index_path);
+        let _process_guard = process_lock.lock();
 
         let indexable_fields = item.get_indexable_fields();
         let index_manager = self.index_manager.lock().unwrap();
@@ -196,6 +211,9 @@ where
         let deleted = self.backend.delete_file(&path)?;
 
         if deleted {
+            let process_lock = crate::storage::index::index_path_lock(&self.index_path);
+            let _process_guard = process_lock.lock();
+
             let index_manager = self.index_manager.lock().unwrap();
             let mut index = index_manager.load_or_create_index(&self.model_name)?;
             index.remove_entry(key);
@@ -206,6 +224,11 @@ where
     }
 
     fn list(&self) -> StorageResult<Vec<String>> {
+        // Reads also acquire the index lock so we never observe a partial
+        // write from a concurrent `store` / `delete` mid-flight.
+        let process_lock = crate::storage::index::index_path_lock(&self.index_path);
+        let _process_guard = process_lock.lock();
+
         let index_manager = self.index_manager.lock().unwrap();
         let index = index_manager.load_or_create_index(&self.model_name)?;
         Ok(index.list_all_keys())
@@ -250,6 +273,9 @@ where
     B: StorageBackend + Clone,
 {
     fn get_index_entries(&self) -> StorageResult<HashMap<String, serde_json::Value>> {
+        let process_lock = crate::storage::index::index_path_lock(&self.index_path);
+        let _process_guard = process_lock.lock();
+
         let index_manager = self.index_manager.lock().unwrap();
         let index = index_manager.load_or_create_index(&self.model_name)?;
 
@@ -272,6 +298,9 @@ where
             }
         }
 
+        let process_lock = crate::storage::index::index_path_lock(&self.index_path);
+        let _process_guard = process_lock.lock();
+
         let index_manager = self.index_manager.lock().unwrap();
         index_manager.save_index(&index)?;
 
@@ -283,6 +312,9 @@ where
         field: &str,
         value: &serde_json::Value,
     ) -> StorageResult<Vec<(String, T)>> {
+        let process_lock = crate::storage::index::index_path_lock(&self.index_path);
+        let _process_guard = process_lock.lock();
+
         let index_manager = self.index_manager.lock().unwrap();
         let index = index_manager.load_or_create_index(&self.model_name)?;
 
