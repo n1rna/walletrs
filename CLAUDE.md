@@ -12,14 +12,16 @@ It was extracted from a larger application (sigvault) and is intended as an open
 
 ```
 walletrs/
-├── crates/server/    # main binary + library — package name `walletrs`
-├── contrib/liana/    # vendored upstream wizardsardine/liana — see UPSTREAM.md
-├── proto/            # walletrpc.proto — single source of truth for the gRPC contract
-├── docs/             # operator + integrator docs
+├── crates/policy-core/    # pure wallet primitives — descriptor / policy types, no I/O
+├── crates/wallet-runtime/ # BDK 1.x runtime + signer + electrum wrapper
+├── crates/server/         # main binary + library — package name `walletrs`
+├── contrib/liana/         # vendored upstream wizardsardine/liana — see UPSTREAM.md
+├── proto/                 # walletrpc.proto — single source of truth for the gRPC contract
+├── docs/                  # operator + integrator docs
 └── README.md
 ```
 
-The two cargo workspace members are `crates/server` and `contrib/liana`. Everything else is documentation, license, or build configuration.
+The cargo workspace members are `crates/policy-core`, `crates/wallet-runtime`, `crates/server`, and `contrib/liana`. `crates/server/fuzz` is its own workspace (nightly-only). Everything else is documentation, license, or build configuration.
 
 ## Common commands
 

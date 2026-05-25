@@ -2,11 +2,35 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-05-25
+
+### Added
+
+- **Defense-in-depth test sprint across `wallet/service`, `wallet/advanced`, `wallet/signer`.** Eliminated panics on user-controlled input and storage-read paths (address parse, PSBT parse, fingerprint parse, descriptor parse). Built an in-process `WalletService` integration harness (tempdir storage + regtest fixtures) covering all gRPC handlers end-to-end. Added a `CONFIG` test seam so the global config no longer pins test orderings. Net +46 service-layer tests.
+- **`proptest` invariants + UTXO-injection lifecycle harness.** Property tests assert structural invariants over descriptor compilation, policy-path enumeration, and PSBT round-trips; a deterministic UTXO-injection harness exercises the full create→fund→sign→broadcast cycle without an external regtest node.
+- **`cargo-fuzz` parser targets + seeded corpora + nightly fuzz workflow.** Fuzz targets cover PSBT, descriptor, address, and policy parsers; corpora are checked in under `crates/server/fuzz/corpus/`. `.github/workflows/fuzz.yml` runs the suite nightly on a schedule with budget caps.
+- **Supply-chain gates: `cargo-deny`.** License + advisory + ban policy enforced in CI.
+
+### Fixed
+
+- **Storage index race.** Concurrent wallet writes could interleave index updates and leave the index pointing at a half-written wallet payload. Switched to a write-then-rename + lock-scoped index update.
+
+## [0.4.0] - 2026-05-23
 
 ### Added
 
 - **HTTP/JSON gateway alongside gRPC.** A new axum server runs on `WALLETRS_HTTP_PORT` (default `8080`) and exposes every RPC at `POST /wallet/<snake_case_method>`. Routes are generated at build time from `(google.api.http)` annotations on `proto/walletrpc.proto` — adding a new RPC requires only the annotation, no Rust glue. JSON encoding uses proto3 semantics via `pbjson` (numeric fields stay numeric, `bytes` is base64). Bearer-token auth is shared with gRPC; the `Ping` RPC bypasses on both surfaces. `tonic::Status` is mapped to standard HTTP status codes with a `{ "code", "message" }` body. Vendored minimal `google/api/{annotations,http}.proto` under `proto/google/api/` to keep the proto compile self-contained.
+- **Workspace split into reusable crates.** Pure wallet primitives extracted from `crates/server` into two new crates: `policy-core` (descriptor / policy types, no I/O) and `wallet-runtime` (BDK 1.x runtime + signer + electrum wrapper). `crates/server` now consumes both. Lets downstream Rust integrators depend on the policy + runtime layers without pulling in the gRPC service.
+- **Unspendable-primary spending condition.** Primary path can be configured with an unspendable internal xpub (BIP-341-style NUMS construction via `policy-core::unspendable_primary_xpub`), forcing all spends through the recovery path while preserving descriptor shape.
+- **Spending-path enumeration helper** in `wallet-runtime` for inspecting which policy paths a given PSBT could satisfy.
+
+### Changed
+
+- **Renamed Liana-flavored internals to `TimelockedPolicy`.** Public-facing types now reflect the generic shape rather than the upstream vendor name; the proto contract is unchanged.
+
+### Fixed
+
+- Release workflow installs `libprotobuf-dev` so `tonic_build` can locate well-known proto types on the GitHub-hosted runner.
 
 ## [0.3.0] - 2026-04-27
 
@@ -30,6 +54,7 @@ All notable changes to this project will be documented here. The format follows 
 - Repository extracted from the `sigvault` monorepo. Cargo workspace at the root with `crates/server` (the gRPC binary + library) and `contrib/liana`. The proto contract lives at `proto/walletrpc.proto` as the single source of truth.
 - License: BSD-3-Clause (single `LICENSE` file).
 
-[Unreleased]: https://github.com/n1rna/walletrs/compare/v0.3.0...HEAD
+[0.5.0]: https://github.com/n1rna/walletrs/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/n1rna/walletrs/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/n1rna/walletrs/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/n1rna/walletrs/compare/v0.1.0...v0.2.0
