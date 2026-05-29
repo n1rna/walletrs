@@ -57,8 +57,15 @@ jobs:
       # `cargo install cargo-fuzz` is ~1 min on a cold cache. The
       # binary is small and stable enough that we don't bother
       # caching it explicitly.
+      #
+      # Deliberately NOT `--locked`: cargo-fuzz 0.13.1 ships a bundled
+      # Cargo.lock pinning rustix 0.36.5, which uses internal
+      # `#[rustc_layout_scalar_valid_range_*]` attributes that current
+      # nightly rustc rejects ("attributes starting with `rustc` are
+      # reserved for use by the `rustc` compiler"). Letting cargo
+      # resolve deps fresh picks a nightly-compatible rustix.
       - name: install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: cargo install cargo-fuzz
 
       - uses: Swatinem/rust-cache@v2
         with:
