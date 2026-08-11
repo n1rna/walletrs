@@ -24,6 +24,34 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  # ── gRPC contract ────────────────────────────────────────────────────────
+  # `proto/` is the source of truth for the wire contract, and consumers need
+  # it to generate their own stubs. Publishing it as a release asset lets them
+  # pin a version without vendoring this repo as a submodule, and keeps the
+  # contract language-agnostic — each consumer picks its own protoc/grpc
+  # toolchain versions.
+  protos:
+    name: publish proto contract
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: package protos
+        run: |
+          set -euo pipefail
+          archive="walletrs-protos-${GITHUB_REF_NAME}.tar.gz"
+          # Deterministic: fixed mtime/owner and a sorted file list, so the
+          # same tag always produces the same bytes and checksum.
+          tar --sort=name --mtime="@0" --owner=0 --group=0 --numeric-owner \
+              -czf "$archive" proto
+          sha256sum "$archive" > "$archive.sha256"
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+          tar -tzf "$archive"
+      - name: upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" "${ARCHIVE}" "${ARCHIVE}.sha256" --clobber
+
   binaries:
     name: build binary (${{ matrix.target }})
     needs: create-release
@@ -153,7 +181,7 @@ jobs:
 
   release-notes:
     name: release notes
-    needs: [binaries, docker-merge]
+    needs: [protos, binaries, docker-merge]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
