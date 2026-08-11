@@ -100,6 +100,16 @@ impl Config {
         #[cfg(not(test))]
         let bitcoin_network = env::var("BITCOIN_NETWORK").unwrap_or_else(|_| "regtest".to_string());
 
+        // Refuse to boot on an unrecognised network rather than silently
+        // falling back. A typo here would otherwise derive regtest keys and
+        // addresses on a live public network.
+        if parse_network_str(&bitcoin_network).is_none() {
+            panic!(
+                "BITCOIN_NETWORK={bitcoin_network:?} is not a supported network \
+                 (expected one of: mainnet, bitcoin, testnet, testnet4, signet, regtest)"
+            );
+        }
+
         Self {
             host,
             port,
@@ -141,7 +151,9 @@ impl Config {
     }
 
     pub fn network(&self) -> Network {
-        parse_network_str(&self.bitcoin_network).unwrap_or(Network::Regtest)
+        // `Config::new` rejects unparseable values, so this cannot fail for a
+        // config that was actually constructed from the environment.
+        parse_network_str(&self.bitcoin_network).expect("bitcoin_network validated at construction")
     }
 
     pub fn host(&self) -> &str {
@@ -169,6 +181,7 @@ impl Config {
 pub fn parse_network_str(network_str: &str) -> Option<Network> {
     match network_str {
         "testnet" => Some(Network::Testnet),
+        "testnet4" => Some(Network::Testnet4),
         "regtest" => Some(Network::Regtest),
         "signet" => Some(Network::Signet),
         "mainnet" | "bitcoin" => Some(Network::Bitcoin),
@@ -232,6 +245,7 @@ mod tests {
         assert_eq!(parse_network_str("mainnet"), Some(Network::Bitcoin));
         assert_eq!(parse_network_str("bitcoin"), Some(Network::Bitcoin));
         assert_eq!(parse_network_str("testnet"), Some(Network::Testnet));
+        assert_eq!(parse_network_str("testnet4"), Some(Network::Testnet4));
         assert_eq!(parse_network_str("signet"), Some(Network::Signet));
         assert_eq!(parse_network_str("regtest"), Some(Network::Regtest));
     }
@@ -241,5 +255,26 @@ mod tests {
         assert_eq!(parse_network_str(""), None);
         assert_eq!(parse_network_str("MAINNET"), None);
         assert_eq!(parse_network_str("liquid"), None);
+        assert_eq!(parse_network_str("testnet5"), None);
+    }
+
+    /// Wallet records persist `CONFIG.network().to_string()`, and
+    /// `Wallet::validate` re-parses that string. The two must agree for every
+    /// supported network or a wallet fails to save on the filesystem backend.
+    #[test]
+    fn network_display_round_trips_through_parse() {
+        for network in [
+            Network::Bitcoin,
+            Network::Testnet,
+            Network::Testnet4,
+            Network::Signet,
+            Network::Regtest,
+        ] {
+            assert_eq!(
+                parse_network_str(&network.to_string()),
+                Some(network),
+                "{network} does not round-trip"
+            );
+        }
     }
 }

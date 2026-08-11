@@ -10,7 +10,7 @@ pub struct StoredWallet {
     pub user_id: String,
     pub name: String,
     pub description: Option<String>,
-    pub network: String,     // "mainnet", "testnet", "regtest"
+    pub network: String, // `bitcoin::Network` Display form — see config::parse_network_str
     pub wallet_type: String, // "single", "multisig", "advanced", etc.
     pub policy_descriptor: Option<String>,
     pub created_at: i64,
@@ -372,8 +372,15 @@ impl Storable for StoredWallet {
             return Err("user_id cannot be empty".to_string());
         }
 
-        if !["mainnet", "testnet", "regtest"].contains(&self.network.as_str()) {
-            return Err("network must be 'mainnet', 'testnet', or 'regtest'".to_string());
+        // Wallet records store `CONFIG.network().to_string()`, so accept
+        // exactly what the config layer can parse — an independent list drifts
+        // (it previously rejected signet, and mainnet, which Display-formats
+        // as "bitcoin" rather than "mainnet").
+        if crate::config::parse_network_str(&self.network).is_none() {
+            return Err(format!(
+                "network {:?} is not a supported bitcoin network",
+                self.network
+            ));
         }
 
         Ok(())
