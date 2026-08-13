@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-13
+
+### Added
+
+- **testnet4 (BIP-94) support.** `BITCOIN_NETWORK=testnet4` is now a recognised network. Requires Bitcoin Core 28 or newer on the node side; earlier releases have no testnet4.
+- **The proto contract is published as a release asset.** Every release now ships `walletrs-protos-<tag>.tar.gz` containing the whole `proto/` tree, so `walletrpc.proto` arrives with the `google/api` annotation imports it depends on and the extracted directory works as a protoc include root unmodified. A `.sha256` is published alongside, and the archive is built with a fixed mtime, owner and sort order so a given tag always produces identical bytes. Consumers can pin a version without vendoring this repo as a submodule — and, more importantly, can keep the version they generate stubs from and the image they deploy as a single decision. `docs/INTEGRATING.md` now leads with this route.
+
+### Fixed
+
+- **Unknown `BITCOIN_NETWORK` values no longer silently become regtest.** `Config::network()` fell back to `Network::Regtest` for anything `parse_network_str` didn't recognise, so a typo — or `testnet4` before this release — would start cleanly and then derive **regtest** descriptors, keys and addresses on a live public network. Unrecognised values now fail at construction instead of being guessed at.
+- **`StoredWallet::validate` rejected valid networks.** It carried its own hardcoded list (`mainnet`/`testnet`/`regtest`), which refused **signet** outright and also refused mainnet, whose `Display` form is `"bitcoin"` rather than `"mainnet"`. Since the stored value is written as `CONFIG.network().to_string()`, the writer and the validator could disagree; validation now defers to `parse_network_str` so they share one definition. Only reachable through the filesystem storage backend — S3 skips schema validation — so hosted deployments were unaffected.
+
+### Changed
+
+- **CI unbroken after toolchain and advisory-database drift.** clippy 1.97's `useless_borrows_in_formatting` fires 46 times inside generated prost/serde output, so the fully-generated `pb` module now carries a blanket clippy allow. `anyhow` 1.0.102 → 1.0.104 ([RUSTSEC-2026-0190](https://rustsec.org/advisories/RUSTSEC-2026-0190), unsoundness in `Error::downcast_mut`) and `quinn-proto` 0.11.14 → 0.11.16 ([RUSTSEC-2026-0185](https://rustsec.org/advisories/RUSTSEC-2026-0185), remote memory exhaustion). The CI workflow also declares explicit permissions — `cargo audit` publishes a check run, which the default read-only token could not create.
+
 ## [0.5.0] - 2026-05-25
 
 ### Added
@@ -54,6 +70,7 @@ All notable changes to this project will be documented here. The format follows 
 - Repository extracted from the `sigvault` monorepo. Cargo workspace at the root with `crates/server` (the gRPC binary + library) and `contrib/liana`. The proto contract lives at `proto/walletrpc.proto` as the single source of truth.
 - License: BSD-3-Clause (single `LICENSE` file).
 
+[0.6.0]: https://github.com/n1rna/walletrs/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/n1rna/walletrs/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/n1rna/walletrs/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/n1rna/walletrs/compare/v0.2.0...v0.3.0
