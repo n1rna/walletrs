@@ -20,27 +20,38 @@ Bearer-token auth is required by default on both surfaces — every RPC except `
 
 ## Vendoring the proto contract
 
-The canonical `walletrpc.proto` lives in this repo at [`proto/walletrpc.proto`](../proto/walletrpc.proto). Two recommended ways to consume it:
+The canonical `walletrpc.proto` lives in this repo at [`proto/walletrpc.proto`](../proto/walletrpc.proto).
 
-### Git submodule (recommended)
+### Release asset (recommended)
+
+Every release publishes the whole `proto/` tree — `walletrpc.proto` plus the
+`google/api` annotation dependencies it imports — as a versioned tarball, so
+you get a self-contained include path without vendoring this repo:
+
+```bash
+gh release download v0.6.0 --repo n1rna/walletrs \
+  --pattern 'walletrs-protos-*.tar.gz' --output - | tar -xz -C vendor/
+```
+
+That yields `vendor/proto/walletrpc.proto` with `vendor/proto` as the include
+root. A matching `.sha256` is published alongside; verify it and pin the tag in
+your build so upgrades are an explicit, reviewable change. The archive is
+byte-reproducible for a given tag.
+
+Consuming the release asset rather than a submodule also keeps the version you
+generate stubs from and the image you deploy as one decision — mismatching them
+is the easiest way to get confusing wire errors.
+
+### Git submodule
 
 ```bash
 git submodule add https://github.com/n1rna/walletrs vendor/walletrs
-git -C vendor/walletrs checkout v0.1.0
+git -C vendor/walletrs checkout v0.6.0
 ```
 
-Point your build at `vendor/walletrs/proto/walletrpc.proto`. Bumping walletrs is a single submodule update.
-
-### Tarball pin
-
-If submodules don't fit your repo conventions, download the proto from a release tag:
-
-```bash
-curl -o vendor/walletrpc.proto \
-  https://raw.githubusercontent.com/n1rna/walletrs/v0.1.0/proto/walletrpc.proto
-```
-
-Track the version in your dependency manifest so renovating is explicit.
+Point your build at `vendor/walletrs/proto/walletrpc.proto`. Convenient if you
+also want to build or run walletrs from source; it drags in the whole repo
+otherwise.
 
 ## Generating client stubs
 
