@@ -596,8 +596,19 @@ pub async fn finalize_wallet_transaction(
                 }
             };
 
-            // Verify finalization by attempting to extract the transaction
-            match base_psbt.clone().extract_tx() {
+            // `extract_tx` does not check that inputs carry a final witness —
+            // it happily extracts an under-signed multisig spend — so require
+            // every input to be finalized before attempting extraction.
+            let all_inputs_final = base_psbt.inputs.iter().all(|input| {
+                input.final_script_witness.is_some() || input.final_script_sig.is_some()
+            });
+            let extracted = if all_inputs_final {
+                base_psbt.clone().extract_tx().map_err(|e| e.to_string())
+            } else {
+                Err("not every input could be finalized".to_string())
+            };
+
+            match extracted {
                 Ok(tx) => {
                     // Successfully extracted - PSBT is truly finalized
                     let finalized_psbt_str = base_psbt.to_string();
@@ -640,7 +651,10 @@ pub async fn finalize_wallet_transaction(
 
                     for (i, input) in base_psbt.inputs.iter().enumerate() {
                         // Check for signatures
-                        if input.tap_key_sig.is_some() || !input.tap_script_sigs.is_empty() {
+                        if input.tap_key_sig.is_some()
+                            || !input.tap_script_sigs.is_empty()
+                            || !input.partial_sigs.is_empty()
+                        {
                             has_signatures = true;
                         }
 
@@ -1620,6 +1634,58 @@ mod tests {
             assert_k_of_n_lifecycle(threshold, key_count, PreferredScriptType::ScriptTypeTaproot)
                 .await;
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lifecycle_two_of_three_multisig_cannot_finalize_with_one_signature() {
+        use crate::wallet::service::test_support::make_k_of_n_wallet;
+
+        let user = unique_id("user");
+        let wallet = unique_id("wallet");
+        let devices: Vec<String> = (0..3).map(|_| unique_id("dev")).collect();
+        let device_refs: Vec<&str> = devices.iter().map(String::as_str).collect();
+        make_k_of_n_wallet(
+            &user,
+            &wallet,
+            2,
+            &device_refs,
+            crate::proto::pb::PreferredScriptType::ScriptTypeSegwitV0,
+        )
+        .await;
+        let _funding_txid = inject_unconfirmed_utxo(&wallet, 200_000).await;
+
+        let fund_resp = fund_wallet_transaction(Request::new(fund_req(
+            &wallet,
+            EXTERNAL_TESTNET_ADDRESS,
+            50_000,
+        )))
+        .await
+        .expect("fund must succeed")
+        .into_inner();
+        sign_wallet_transaction(Request::new(SignWalletTransactionRequest {
+            wallet_id: wallet.clone(),
+            txid: fund_resp.txid.clone(),
+            device_id: devices[0].clone(),
+        }))
+        .await
+        .expect("first signature must succeed");
+
+        let err = finalize_wallet_transaction(Request::new(FinalizeWalletTransactionRequest {
+            wallet_id: wallet.clone(),
+            txid: fund_resp.txid.clone(),
+        }))
+        .await
+        .expect_err("one signature must not satisfy a 2-of-3");
+        assert_eq!(err.code(), Code::FailedPrecondition);
+        assert!(
+            err.message().contains("not finalized"),
+            "error should name the unfinalized input, got: {}",
+            err.message()
+        );
+        assert!(
+            db::get_finalized_psbt(&wallet, &fund_resp.txid).is_err(),
+            "an under-signed PSBT must not be stored as finalized"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
