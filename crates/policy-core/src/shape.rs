@@ -72,7 +72,8 @@ pub enum WalletShape {
 ///    builder would reject the raw shape anyway because recovery paths
 ///    need a non-zero timelock.
 /// 2. Single-condition fast path: one primary, zero timelock → either a single
-///    sig wallet or a flat multisig in the requested script kind.
+///    sig wallet or a flat k-of-n multisig (any `1 <= k <= n`, `n >= 2`) in
+///    the requested script kind.
 /// 3. Otherwise: a timelocked taproot policy. P2WSH (SegwitV0) is not supported
 ///    for timelocked policies in this build.
 pub fn classify(spec: &WalletSpec) -> Result<WalletShape, PolicyError> {
@@ -301,7 +302,10 @@ fn try_single_condition_shape(
             kind,
             key: key.clone(),
         }),
-        PolicyPath::Multi { threshold, keys } if *threshold > 1 => Some(WalletShape::Multisig {
+        // Any k-of-n over two or more keys is a flat multisig, 1-of-n
+        // included: with no recovery condition there is nothing for the
+        // timelocked builder to work with, and it rejects the spec.
+        PolicyPath::Multi { threshold, keys } if keys.len() >= 2 => Some(WalletShape::Multisig {
             kind,
             threshold: *threshold,
             keys: keys.clone(),

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **1-of-n multisig wallets can be created.** A lone `Multi` condition with `threshold = 1` (for example 1-of-2) was not recognised as a flat multisig — the classifier only took that branch for `threshold > 1` — so it fell through to the timelocked-policy builder and failed with `A Liana policy requires at least one recovery path`. Any `1 ≤ k ≤ n` over two or more keys now builds `wsh(sortedmulti(k, …))`, or `tr(NUMS, multi_a(k, …))` with the taproot preference, exactly as 2-of-n already did.
+
 ## [0.6.0] - 2026-08-13
 
 ### Added

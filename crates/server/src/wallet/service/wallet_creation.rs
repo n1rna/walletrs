@@ -338,6 +338,98 @@ mod tests {
         );
     }
 
+    /// Create a lone `Multi` condition wallet over `key_count` fresh system
+    /// keys and return the response.
+    async fn create_k_of_n(
+        threshold: u32,
+        key_count: usize,
+        preferred_script_type: i32,
+    ) -> CreateGenericWalletResponse {
+        setup();
+        let user = unique_id("user");
+        let mut devices = Vec::new();
+        for _ in 0..key_count {
+            let dev = unique_id("dev");
+            let _ = make_system_key(&user, &dev).await;
+            devices.push(dev);
+        }
+        let device_refs: Vec<&str> = devices.iter().map(String::as_str).collect();
+
+        create_generic_wallet(Request::new(CreateGenericWalletRequest {
+            user_id: user,
+            wallet_id: unique_id("wallet"),
+            spending_conditions: vec![cond(
+                "primary",
+                true,
+                0,
+                ProtoPolicyType::Multi,
+                threshold,
+                &device_refs,
+            )],
+            network: "testnet".to_string(),
+            preferred_script_type,
+        }))
+        .await
+        .unwrap_or_else(|e| {
+            panic!(
+                "{}-of-{} (script type {}) must succeed: {:?} - {}",
+                threshold,
+                key_count,
+                preferred_script_type,
+                e.code(),
+                e.message()
+            )
+        })
+        .into_inner()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_generic_wallet_k_of_n_segwit_returns_wsh_sortedmulti() {
+        // 0 = auto, 2 = segwit v0; both resolve a lone Multi condition to
+        // wsh(sortedmulti), 1-of-n included.
+        for script_type in [0, 2] {
+            for (threshold, key_count) in [(1, 2), (1, 3), (2, 2), (2, 3)] {
+                let resp = create_k_of_n(threshold, key_count, script_type).await;
+                assert_eq!(resp.status, "success");
+                let prefix = format!("wsh(sortedmulti({},", threshold);
+                assert!(
+                    resp.external_descriptor.starts_with(&prefix),
+                    "{}-of-{} must use wsh+sortedmulti, got: {}",
+                    threshold,
+                    key_count,
+                    resp.external_descriptor
+                );
+                assert!(resp.internal_descriptor.starts_with(&prefix));
+                assert!(
+                    resp.taproot_leaf_info.is_empty(),
+                    "flat multisig has no taproot leaves"
+                );
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_generic_wallet_k_of_n_taproot_returns_tr_multi_a() {
+        for (threshold, key_count) in [(1, 2), (1, 3), (2, 2), (2, 3)] {
+            let resp = create_k_of_n(threshold, key_count, 1).await;
+            assert_eq!(resp.status, "success");
+            assert!(
+                resp.external_descriptor.starts_with("tr(")
+                    && resp
+                        .external_descriptor
+                        .contains(&format!(",multi_a({},", threshold)),
+                "{}-of-{} taproot must use tr+multi_a, got: {}",
+                threshold,
+                key_count,
+                resp.external_descriptor
+            );
+            assert!(
+                resp.taproot_leaf_info.is_empty(),
+                "flat taproot multisig reports no leaves"
+            );
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn create_generic_wallet_timelocked_policy_returns_taproot_metadata() {
         setup();

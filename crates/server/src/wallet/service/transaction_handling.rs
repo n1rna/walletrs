@@ -1509,6 +1509,119 @@ mod tests {
         );
     }
 
+    /// Fund → Sign (with the first `threshold` devices) → Finalize for a
+    /// flat `threshold`-of-`key_count` multisig, asserting the finalized
+    /// PSBT extracts to a transaction paying the destination.
+    async fn assert_k_of_n_lifecycle(
+        threshold: u32,
+        key_count: usize,
+        script_type: crate::proto::pb::PreferredScriptType,
+    ) {
+        use crate::wallet::service::test_support::make_k_of_n_wallet;
+
+        let label = format!("{}-of-{} {:?}", threshold, key_count, script_type);
+        let user = unique_id("user");
+        let wallet = unique_id("wallet");
+        let devices: Vec<String> = (0..key_count).map(|_| unique_id("dev")).collect();
+        let device_refs: Vec<&str> = devices.iter().map(String::as_str).collect();
+        make_k_of_n_wallet(&user, &wallet, threshold, &device_refs, script_type).await;
+        let _funding_txid = inject_unconfirmed_utxo(&wallet, 200_000).await;
+
+        let fund_resp = fund_wallet_transaction(Request::new(fund_req(
+            &wallet,
+            EXTERNAL_TESTNET_ADDRESS,
+            50_000,
+        )))
+        .await
+        .unwrap_or_else(|e| panic!("{}: fund must succeed: {}", label, e.message()))
+        .into_inner();
+
+        for device in devices.iter().take(threshold as usize) {
+            let sign_resp = sign_wallet_transaction(Request::new(SignWalletTransactionRequest {
+                wallet_id: wallet.clone(),
+                txid: fund_resp.txid.clone(),
+                device_id: device.clone(),
+            }))
+            .await
+            .unwrap_or_else(|e| panic!("{}: sign must succeed: {}", label, e.message()))
+            .into_inner();
+            let signed = Psbt::from_str(&sign_resp.tx_raw).expect("sign tx_raw is valid PSBT");
+            assert!(
+                signed
+                    .inputs
+                    .iter()
+                    .all(|i| i.partial_sigs.len() + i.tap_script_sigs.len() == 1),
+                "{}: each device contributes exactly one signature per input",
+                label
+            );
+        }
+
+        let final_resp =
+            finalize_wallet_transaction(Request::new(FinalizeWalletTransactionRequest {
+                wallet_id: wallet,
+                txid: fund_resp.txid,
+            }))
+            .await
+            .unwrap_or_else(|e| panic!("{}: finalize must succeed: {}", label, e.message()))
+            .into_inner();
+
+        let finalized = Psbt::from_str(&final_resp.tx_raw).expect("finalize tx_raw is valid PSBT");
+        // wsh(sortedmulti): dummy + k signatures + witness script.
+        // tr(multi_a): one slot per key + leaf script + control block.
+        let expected_witness_len = match script_type {
+            crate::proto::pb::PreferredScriptType::ScriptTypeTaproot => key_count + 2,
+            _ => threshold as usize + 2,
+        };
+        for input in &finalized.inputs {
+            let witness = input
+                .final_script_witness
+                .as_ref()
+                .unwrap_or_else(|| panic!("{}: every input must carry a final witness", label));
+            assert_eq!(
+                witness.len(),
+                expected_witness_len,
+                "{}: unexpected witness stack size",
+                label
+            );
+            assert_eq!(
+                witness.iter().filter(|item| item.len() >= 64).count(),
+                threshold as usize + 1,
+                "{}: witness must hold exactly `threshold` signatures plus the script",
+                label
+            );
+        }
+        let extracted = finalized
+            .extract_tx()
+            .unwrap_or_else(|e| panic!("{}: finalized PSBT must extract: {}", label, e));
+        assert!(
+            extracted.output.iter().any(|o| o.value.to_sat() == 50_000),
+            "{}: extracted transaction must include the destination output",
+            label
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lifecycle_k_of_n_segwit_multisig_fund_sign_finalize() {
+        use crate::proto::pb::PreferredScriptType;
+        for (threshold, key_count) in [(1, 2), (1, 3), (2, 2), (2, 3)] {
+            assert_k_of_n_lifecycle(
+                threshold,
+                key_count,
+                PreferredScriptType::ScriptTypeSegwitV0,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lifecycle_k_of_n_taproot_multisig_fund_sign_finalize() {
+        use crate::proto::pb::PreferredScriptType;
+        for (threshold, key_count) in [(1, 2), (1, 3), (2, 2), (2, 3)] {
+            assert_k_of_n_lifecycle(threshold, key_count, PreferredScriptType::ScriptTypeTaproot)
+                .await;
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn lifecycle_single_sig_fund_fails_when_only_dust_is_available() {
         // Inject a tiny UTXO that can't even cover the requested spend +
