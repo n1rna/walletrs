@@ -17,9 +17,11 @@ pub const BIP341_NUMS_HEX: &str =
 
 /// Build the deterministic NUMS-derived Xpub Liana uses for a wallet's
 /// "unspendable primary" path (QBL-235). Construction mirrors
-/// `liana::descriptors::analysis::unspendable_internal_xpub` so the
-/// resulting wallet is recognised as unspendable-primary by Liana's
-/// own policy parser too.
+/// `liana::descriptors::analysis::unspendable_internal_xpub`, which is
+/// how a signer or another wallet can tell the internal key is
+/// unspendable. Liana's own parser then drops the key from the policy
+/// and rejects the descriptor for having no primary path, so read these
+/// back with `wallet_runtime::PolicyDescriptor`, not `LianaDescriptor`.
 ///
 /// The chain code is `sha256(concat(serialize(pubkey) for each
 /// recovery xpub))` — this is what makes it deterministic from the

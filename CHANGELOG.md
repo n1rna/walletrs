@@ -4,6 +4,11 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Wallets with an unspendable primary can spend through their recovery path.** Such a wallet could be created and funded, but `FundWalletTransaction` on the recovery leaf failed with `leaf hash '…' provided but wallet has no policy descriptor`, leaving the funds unmovable through walletrs. The descriptor built for this shape uses Liana's deterministic unspendable xpub as the taproot internal key; Liana's parser drops that key from the policy, finds no primary path and rejects the descriptor, and the spend path treated the parse failure as "flat wallet". Stored descriptors are now read through `wallet_runtime::PolicyDescriptor`, which falls back to a recovery-only reader for exactly `tr(UNSPENDABLE, leaves of keys behind older)`. Descriptors and addresses are unchanged, so wallets created before this release become spendable without migration. `list_spending_paths` returns the recovery paths for these wallets instead of failing.
+- **Wallet creation fails if the policy descriptor cannot be read back or stored.** Both were logged and ignored, which is how a wallet that could receive but not spend got handed out. `CreateGenericWallet` now returns `INTERNAL` instead.
+
 ## [0.6.1] - 2026-10-09
 
 ### Fixed

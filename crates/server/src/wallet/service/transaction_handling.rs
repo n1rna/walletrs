@@ -13,7 +13,6 @@ use crate::wallet::bdk::BdkWalletManager;
 use crate::wallet::signer::{
     add_signers_for_psbt, resolve_policy_path_from_leaf, sign_psbt_with_taproot_support,
 };
-use crate::LianaDescriptor;
 use bdk_wallet::bitcoin::{Address as BitcoinAddress, Network, Psbt};
 use bdk_wallet::chain::ChainPosition;
 use bdk_wallet::KeychainKind;
@@ -23,7 +22,7 @@ use miniscript::psbt::PsbtExt;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use tonic::{Request, Response, Status};
-use wallet_runtime::ElectrumClient;
+use wallet_runtime::{ElectrumClient, PolicyDescriptor};
 
 /// Load the persisted policy descriptor for a wallet. Returns `None` for
 /// flat wallets (single-sig, plain multisig, taproot multisig with NUMS
@@ -32,7 +31,7 @@ use wallet_runtime::ElectrumClient;
 /// A *parse* failure is also folded into `None` so flat-wallet code paths
 /// continue to work, but emits a `warn!` so descriptor corruption is
 /// observable rather than silent.
-fn load_policy_descriptor(wallet_id: &str) -> Option<LianaDescriptor> {
+fn load_policy_descriptor(wallet_id: &str) -> Option<PolicyDescriptor> {
     let stored = match db::get_policy_descriptor(wallet_id) {
         Ok(opt) => opt?,
         Err(e) => {
@@ -44,7 +43,7 @@ fn load_policy_descriptor(wallet_id: &str) -> Option<LianaDescriptor> {
             return None;
         }
     };
-    match LianaDescriptor::from_str(&stored) {
+    match PolicyDescriptor::from_str(&stored) {
         Ok(d) => Some(d),
         Err(e) => {
             log::warn!(
@@ -357,7 +356,11 @@ pub async fn fund_wallet_transaction(
                 }
             };
 
-            let pruned_psbt_str = match load_policy_descriptor(&req.wallet_id) {
+            // Recovery-only wallets skip pruning like flat wallets do: Liana's
+            // pruner needs a primary path.
+            let liana_desc =
+                load_policy_descriptor(&req.wallet_id).and_then(|desc| desc.as_liana().cloned());
+            let pruned_psbt_str = match liana_desc {
                 Some(policy_desc) => {
                     match policy_desc.prune_bip32_derivs_last_avail(psbt.clone()) {
                         Ok(pruned) => {
@@ -375,7 +378,7 @@ pub async fn fund_wallet_transaction(
                 }
                 None => {
                     log::debug!(
-                        "No policy descriptor for wallet {}, skipping pruning",
+                        "No prunable policy descriptor for wallet {}, skipping pruning",
                         req.wallet_id
                     );
                     String::new()

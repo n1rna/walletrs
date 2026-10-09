@@ -21,6 +21,7 @@ log = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+bdk_wallet = { version = "1.1.0", features = ["test-utils"] }
 
 [lints.rust]
 warnings = { level = "deny", priority = -1 }

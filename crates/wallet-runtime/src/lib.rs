@@ -7,6 +7,8 @@
 //!   `bdk_wallet::WalletPersister`.
 //! - `signer`: PSBT signing utilities that accept key material as parameters
 //!   (no database lookups, no server context).
+//! - `policy_descriptor`: the stored multipath policy descriptor, including
+//!   the recovery-only shape Liana's parser rejects.
 //! - `policy_path`: taproot leaf-hash → BDK policy-path resolver for
 //!   timelocked policies.
 //! - `electrum`: thin wrapper around `BdkElectrumClient` for full scans and
@@ -22,6 +24,7 @@
 pub mod electrum;
 pub mod error;
 pub mod persister;
+pub mod policy_descriptor;
 pub mod policy_path;
 pub mod psbt;
 pub mod runtime;
@@ -32,7 +35,8 @@ pub use bdk_wallet::{ChangeSet, KeychainKind, PersistedWallet, Wallet, WalletPer
 pub use electrum::ElectrumClient;
 pub use error::WalletRuntimeError;
 pub use persister::InMemoryPersister;
-pub use policy_path::resolve_policy_path_from_leaf;
+pub use policy_descriptor::{PolicyDescriptor, RecoveryLeaf, RecoveryOnlyDescriptor};
+pub use policy_path::{resolve_policy_path, resolve_policy_path_from_leaf};
 pub use psbt::{analyze_for_signing, PsbtSignerAnalysis};
 pub use runtime::{
     create_wallet, load_wallet, peek_address, reveal_next_address, WalletDescriptors,
