@@ -366,3 +366,233 @@ fn descriptor_pair_for_timelocked_policy_populates_policy_descriptor() {
         "TimelockedPolicy shape must produce a policy descriptor"
     );
 }
+
+/// BIP-341 NUMS point the taproot multisig builder uses as internal key.
+const NUMS_INTERNAL_KEY: &str =
+    "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
+
+/// Every `(threshold, key count)` a lone `Multi` condition must accept as a
+/// flat multisig, 1-of-n included.
+const K_OF_N: [(usize, usize); 4] = [(1, 2), (1, 3), (2, 2), (2, 3)];
+
+fn k_of_n_spec(
+    threshold: usize,
+    key_count: usize,
+    preferred_script_type: PreferredScriptType,
+) -> (WalletSpec, Vec<Fixture>) {
+    let fixtures: Vec<Fixture> = (1..=key_count)
+        .map(|i| make_key(&format!("device-{}", i), i as u64))
+        .collect();
+    let ids: Vec<&str> = fixtures.iter().map(|f| f.device_id.as_str()).collect();
+    let spec = WalletSpec {
+        network: Network::Testnet,
+        conditions: vec![cond("primary", true, 0, PolicyType::Multi, threshold, &ids)],
+        managed_keys: keys(&fixtures.iter().collect::<Vec<_>>()),
+        preferred_script_type,
+    };
+    (spec, fixtures)
+}
+
+/// Comma-joined key expressions as they appear in the built descriptor:
+/// origin carries the derivation path, multipath suffix replaced by the
+/// keychain child.
+fn descriptor_keys(fixtures: &[Fixture], child: u32) -> String {
+    fixtures
+        .iter()
+        .map(|f| {
+            f.key
+                .xpub
+                .replace(
+                    &format!("[{}]", f.key.fingerprint),
+                    &format!("[{}/84'/1'/0']", f.key.fingerprint),
+                )
+                .replace("/<0;1>/*", &format!("/{}/*", child))
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn assert_parses_as_descriptor(descriptor: &str) {
+    miniscript::Descriptor::<miniscript::descriptor::DescriptorPublicKey>::from_str(descriptor)
+        .unwrap_or_else(|e| panic!("descriptor {} must parse: {}", descriptor, e));
+}
+
+#[test]
+fn k_of_n_segwit_v0_builds_wsh_sortedmulti() {
+    for preferred in [PreferredScriptType::Auto, PreferredScriptType::SegwitV0] {
+        for (threshold, key_count) in K_OF_N {
+            let (spec, fixtures) = k_of_n_spec(threshold, key_count, preferred);
+            spec.validate().unwrap();
+
+            let shape = shape::classify(&spec).unwrap_or_else(|e| {
+                panic!(
+                    "{}-of-{} {:?} must classify: {}",
+                    threshold, key_count, preferred, e
+                )
+            });
+            match &shape {
+                WalletShape::Multisig {
+                    kind: ScriptKind::SegwitV0,
+                    threshold: t,
+                    keys,
+                } => {
+                    assert_eq!(*t, threshold);
+                    assert_eq!(keys.len(), key_count);
+                }
+                other => panic!(
+                    "{}-of-{} {:?}: expected Multisig SegwitV0, got {:?}",
+                    threshold, key_count, preferred, other
+                ),
+            }
+
+            let pair = descriptor::build(&shape).unwrap();
+            assert_eq!(
+                pair.external,
+                format!(
+                    "wsh(sortedmulti({},{}))",
+                    threshold,
+                    descriptor_keys(&fixtures, 0)
+                )
+            );
+            assert_eq!(
+                pair.internal,
+                format!(
+                    "wsh(sortedmulti({},{}))",
+                    threshold,
+                    descriptor_keys(&fixtures, 1)
+                )
+            );
+            assert!(pair.policy_descriptor.is_none());
+            assert_parses_as_descriptor(&pair.external);
+            assert_parses_as_descriptor(&pair.internal);
+        }
+    }
+}
+
+#[test]
+fn k_of_n_taproot_builds_tr_nums_multi_a() {
+    for (threshold, key_count) in K_OF_N {
+        let (spec, fixtures) = k_of_n_spec(threshold, key_count, PreferredScriptType::Taproot);
+        spec.validate().unwrap();
+
+        let shape = shape::classify(&spec).unwrap_or_else(|e| {
+            panic!(
+                "{}-of-{} taproot must classify: {}",
+                threshold, key_count, e
+            )
+        });
+        match &shape {
+            WalletShape::Multisig {
+                kind: ScriptKind::Taproot,
+                threshold: t,
+                keys,
+            } => {
+                assert_eq!(*t, threshold);
+                assert_eq!(keys.len(), key_count);
+            }
+            other => panic!(
+                "{}-of-{}: expected Multisig Taproot, got {:?}",
+                threshold, key_count, other
+            ),
+        }
+
+        let pair = descriptor::build(&shape).unwrap();
+        assert_eq!(
+            pair.external,
+            format!(
+                "tr({},multi_a({},{}))",
+                NUMS_INTERNAL_KEY,
+                threshold,
+                descriptor_keys(&fixtures, 0)
+            )
+        );
+        assert_eq!(
+            pair.internal,
+            format!(
+                "tr({},multi_a({},{}))",
+                NUMS_INTERNAL_KEY,
+                threshold,
+                descriptor_keys(&fixtures, 1)
+            )
+        );
+        assert!(pair.policy_descriptor.is_none());
+        assert_parses_as_descriptor(&pair.external);
+        assert_parses_as_descriptor(&pair.internal);
+    }
+}
+
+#[test]
+fn single_sig_descriptors_unchanged() {
+    for (preferred, wrapper) in [
+        (PreferredScriptType::Auto, "wpkh"),
+        (PreferredScriptType::SegwitV0, "wpkh"),
+        (PreferredScriptType::Taproot, "tr"),
+    ] {
+        let f = make_key("device-1", 1);
+        let spec = WalletSpec {
+            network: Network::Testnet,
+            conditions: vec![cond(
+                "primary",
+                true,
+                0,
+                PolicyType::Single,
+                1,
+                &["device-1"],
+            )],
+            managed_keys: keys(&[&f]),
+            preferred_script_type: preferred,
+        };
+        let shape = shape::classify(&spec).unwrap();
+        let pair = descriptor::build(&shape).unwrap();
+        let fixtures = [f];
+        assert_eq!(
+            pair.external,
+            format!("{}({})", wrapper, descriptor_keys(&fixtures, 0))
+        );
+        assert_eq!(
+            pair.internal,
+            format!("{}({})", wrapper, descriptor_keys(&fixtures, 1))
+        );
+        assert!(pair.policy_descriptor.is_none());
+    }
+}
+
+#[test]
+fn one_of_n_primary_with_timelocked_recovery_stays_timelocked_policy() {
+    let f1 = make_key("device-1", 1);
+    let f2 = make_key("device-2", 2);
+    let f3 = make_key("device-3", 3);
+    let spec = WalletSpec {
+        network: Network::Testnet,
+        conditions: vec![
+            cond(
+                "primary",
+                true,
+                0,
+                PolicyType::Multi,
+                1,
+                &["device-1", "device-2"],
+            ),
+            cond("recovery", false, 144, PolicyType::Single, 1, &["device-3"]),
+        ],
+        managed_keys: keys(&[&f1, &f2, &f3]),
+        preferred_script_type: PreferredScriptType::Auto,
+    };
+
+    let shape = shape::classify(&spec).unwrap();
+    match &shape {
+        WalletShape::TimelockedPolicy {
+            primary: shape::PolicyPath::Multi { threshold, keys },
+            recoveries,
+            ..
+        } => {
+            assert_eq!(*threshold, 1);
+            assert_eq!(keys.len(), 2);
+            assert_eq!(recoveries.len(), 1);
+        }
+        other => panic!("expected TimelockedPolicy, got {:?}", other),
+    }
+    let pair = descriptor::build(&shape).unwrap();
+    assert!(pair.external.starts_with("tr("));
+    assert!(pair.policy_descriptor.is_some());
+}

@@ -135,8 +135,8 @@ crates/server/src/
 |---|---|---|
 | `SingleSig { kind: SegwitV0 }` | `wpkh(K)` | one key, no timelock, `Auto` or `SegwitV0` preference |
 | `SingleSig { kind: Taproot }` | `tr(K)` (BIP-86) | one key, no timelock, `Taproot` preference |
-| `Multisig { kind: SegwitV0 }` | `wsh(sortedmulti(t, K1, K2, …))` | many keys + threshold, `Auto` or `SegwitV0` |
-| `Multisig { kind: Taproot }` | `tr(NUMS, multi_a(t, K1, K2, …))` | many keys + threshold, `Taproot` (or `Auto` when classifier folds zero-timelock conditions) |
+| `Multisig { kind: SegwitV0 }` | `wsh(sortedmulti(t, K1, K2, …))` | one `Multi` condition over two or more keys, any threshold `1 ≤ t ≤ n` (1-of-n included), no timelock, `Auto` or `SegwitV0` |
+| `Multisig { kind: Taproot }` | `tr(NUMS, multi_a(t, K1, K2, …))` | same, with `Taproot` preference (or `Auto` when classifier folds zero-timelock conditions) |
 | `TimelockedPolicy` | Liana — primary path + `BTreeMap<u16, PathInfo>` recoveries → taproot multipath | any condition has a non-zero timelock, or multiple primaries with disjoint signers |
 
 The `Auto` script-type combined with multiple zero-timelock conditions triggers the "smart taproot multisig combine" branch — the classifier folds every condition's keys into one taproot multisig with the primary's threshold. This matches clients that model multisigs as several conditions instead of one `Multi` condition; raw Liana would reject `timelock=0` recovery paths anyway.

@@ -208,6 +208,26 @@ pub async fn make_single_sig_wallet(user_id: &str, wallet_id: &str, device_id: &
 /// keys are system-managed so the wallet is fully self-contained for
 /// sign-path tests in later phases.
 pub async fn make_multisig_wallet(user_id: &str, wallet_id: &str, device_ids: [&str; 3]) {
+    make_k_of_n_wallet(
+        user_id,
+        wallet_id,
+        2,
+        &device_ids,
+        ProtoPreferredScriptType::ScriptTypeAuto,
+    )
+    .await;
+}
+
+/// Create a flat `threshold`-of-`device_ids.len()` multisig wallet via the
+/// real RPC, in the requested script type. Every key is system-managed so
+/// any subset of devices can sign.
+pub async fn make_k_of_n_wallet(
+    user_id: &str,
+    wallet_id: &str,
+    threshold: u32,
+    device_ids: &[&str],
+    script_type: ProtoPreferredScriptType,
+) {
     setup();
     for d in device_ids {
         let _ = make_system_key(user_id, d).await;
@@ -219,16 +239,24 @@ pub async fn make_multisig_wallet(user_id: &str, wallet_id: &str, device_ids: [&
             id: "primary".to_string(),
             is_primary: true,
             timelock: 0,
-            threshold: 2,
+            threshold,
             policy: ProtoPolicyType::Multi as i32,
             managed_key_ids: device_ids.iter().map(|s| s.to_string()).collect(),
             is_unspendable: false,
         }],
         network: "testnet".to_string(),
-        preferred_script_type: ProtoPreferredScriptType::ScriptTypeAuto as i32,
+        preferred_script_type: script_type as i32,
     }))
     .await
-    .expect("create_generic_wallet multisig fixture must succeed");
+    .unwrap_or_else(|e| {
+        panic!(
+            "create_generic_wallet {}-of-{} fixture failed: {:?} - {}",
+            threshold,
+            device_ids.len(),
+            e.code(),
+            e.message()
+        )
+    });
 }
 
 // ---- UTXO injection --------------------------------------------------------
