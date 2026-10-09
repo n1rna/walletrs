@@ -16,12 +16,11 @@ use bdk_wallet::{KeychainKind, Wallet};
 use log::{debug, info, warn};
 use tonic::Status;
 use wallet_runtime::{
-    add_xprv_signer, analyze_for_signing, resolve_policy_path_from_leaf as wr_resolve_path,
-    sign_psbt as wr_sign_psbt, PsbtSignerAnalysis, SignerKind,
+    add_xprv_signer, analyze_for_signing, resolve_policy_path as wr_resolve_path,
+    sign_psbt as wr_sign_psbt, PolicyDescriptor, PsbtSignerAnalysis, SignerKind,
 };
 
 use crate::db;
-use crate::LianaDescriptor;
 
 /// Parse the 8-hex-character fingerprint that was persisted for a managed
 /// key. A failure here is *storage corruption* (a real managed key always
@@ -190,7 +189,7 @@ pub fn sign_psbt_with_taproot_support(
 pub fn resolve_policy_path_from_leaf(
     wallet: &bdk_wallet::Wallet,
     leaf_hash: &str,
-    policy_descriptor: Option<&LianaDescriptor>,
+    policy_descriptor: Option<&PolicyDescriptor>,
 ) -> Result<BTreeMap<String, Vec<usize>>, Status> {
     wr_resolve_path(wallet, leaf_hash, policy_descriptor).map_err(|e| match e.to_string() {
         ref s
@@ -239,7 +238,7 @@ mod tests {
 
     fn build_timelocked_wallet() -> (
         Wallet,
-        crate::LianaDescriptor,
+        PolicyDescriptor,
         Vec<crate::wallet::advanced::TaprootLeafInfo>,
     ) {
         let (id1, k1) = make_key(1);
@@ -297,7 +296,11 @@ mod tests {
             .create_wallet_no_persist()
             .expect("BDK wallet");
 
-        (wallet, policy_desc, metadata.leaves)
+        (
+            wallet,
+            PolicyDescriptor::Liana(policy_desc),
+            metadata.leaves,
+        )
     }
 
     #[test]

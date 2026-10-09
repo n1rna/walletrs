@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
 use tonic::{Request, Response, Status};
+use wallet_runtime::PolicyDescriptor;
 
 use crate::db::{self, StoredManagedKey};
 use crate::proto::pb::{
@@ -57,11 +59,20 @@ pub async fn create_generic_wallet(
         .map_err(|e| Status::internal(format!("Wallet creation failed: {}", e)))?;
 
     if let Some(ref policy_desc) = result.policy_descriptor {
+        // Spending re-reads this descriptor. A wallet whose descriptor
+        // cannot be read back can receive funds but never move them, so
+        // refuse to hand out its addresses.
+        PolicyDescriptor::from_str(policy_desc).map_err(|e| {
+            Status::internal(format!(
+                "Wallet creation failed: policy descriptor does not round-trip: {}",
+                e
+            ))
+        })?;
         log::info!("Persisting policy descriptor for wallet {}", req.wallet_id);
         let updated_wallet = stored_wallet.with_policy_descriptor(policy_desc);
-        if let Err(e) = updated_wallet.store() {
-            log::warn!("Failed to persist policy descriptor: {}", e);
-        }
+        updated_wallet
+            .store()
+            .map_err(|e| Status::internal(format!("Failed to persist policy descriptor: {}", e)))?;
     }
 
     let taproot_leaf_info = result
@@ -499,6 +510,61 @@ mod tests {
             stored.policy_descriptor.is_some(),
             "TimelockedPolicy wallet must persist its policy descriptor"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_generic_wallet_unspendable_primary_persists_a_readable_descriptor() {
+        // Spending re-reads the stored descriptor to resolve the recovery
+        // leaf; Liana's parser rejects this shape, so it must come back
+        // through the recovery-only reader.
+        setup();
+        let user = unique_id("user");
+        let dev_recovery = unique_id("dev");
+        let _ = make_system_key(&user, &dev_recovery).await;
+
+        let mut primary = cond("primary", true, 0, ProtoPolicyType::Single, 0, &[]);
+        primary.is_unspendable = true;
+
+        let wallet_id = unique_id("wallet");
+        let resp = create_generic_wallet(Request::new(CreateGenericWalletRequest {
+            user_id: user,
+            wallet_id: wallet_id.clone(),
+            spending_conditions: vec![
+                primary,
+                cond(
+                    "recovery",
+                    false,
+                    10,
+                    ProtoPolicyType::Single,
+                    1,
+                    &[&dev_recovery],
+                ),
+            ],
+            network: "testnet".to_string(),
+            preferred_script_type: 0,
+        }))
+        .await
+        .expect("unspendable primary must succeed")
+        .into_inner();
+
+        let recovery_leaf = resp
+            .taproot_leaf_info
+            .iter()
+            .find(|l| l.spending_condition_id == "recovery")
+            .expect("recovery leaf in response");
+
+        let stored = db::get_wallet(&wallet_id)
+            .expect("wallet stored")
+            .policy_descriptor
+            .expect("policy descriptor persisted");
+        match PolicyDescriptor::from_str(&stored).expect("stored descriptor reads back") {
+            PolicyDescriptor::RecoveryOnly(desc) => {
+                assert_eq!(desc.leaves().len(), 1);
+                assert_eq!(desc.leaves()[0].leaf_hash, recovery_leaf.leaf_hash);
+                assert_eq!(desc.leaves()[0].timelock, 10);
+            }
+            PolicyDescriptor::Liana(_) => panic!("expected the recovery-only reader"),
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

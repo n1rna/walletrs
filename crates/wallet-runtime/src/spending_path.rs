@@ -17,6 +17,7 @@ use std::str::FromStr;
 use liana::descriptors::LianaDescriptor;
 
 use crate::error::WalletRuntimeError;
+use crate::policy_descriptor::{PolicyDescriptor, RecoveryOnlyDescriptor};
 
 /// One spending option for the user. Single-sig and multisig
 /// descriptors emit a single path; timelocked-policy descriptors emit
@@ -103,8 +104,11 @@ pub fn list_spending_paths(
             // single default path (descriptor-only wallets that aren't
             // timelocked — bare wpkh, multisig the manager didn't tag,
             // etc.).
-            match LianaDescriptor::from_str(external_descriptor) {
-                Ok(desc) => timelocked_paths(&desc, external_policy_id),
+            match PolicyDescriptor::from_str(external_descriptor) {
+                Ok(PolicyDescriptor::Liana(desc)) => timelocked_paths(&desc, external_policy_id),
+                Ok(PolicyDescriptor::RecoveryOnly(desc)) => {
+                    Ok(recovery_only_paths(&desc, external_policy_id))
+                }
                 Err(_) if policy_type == "descriptor" => Ok(vec![SpendingPath {
                     id: "default".to_string(),
                     label: "Default".to_string(),
@@ -198,6 +202,50 @@ fn timelocked_paths(
     }
 
     Ok(out)
+}
+
+/// Recovery-only wallets have no primary path to offer: one entry per
+/// recovery leaf, each pointing at its own BDK policy child.
+fn recovery_only_paths(
+    desc: &RecoveryOnlyDescriptor,
+    external_policy_id: Option<&str>,
+) -> Vec<SpendingPath> {
+    let mut leaves: Vec<_> = desc.leaves().iter().enumerate().collect();
+    leaves.sort_by_key(|(_, leaf)| leaf.timelock);
+    leaves
+        .into_iter()
+        .enumerate()
+        .map(|(idx, (leaf_idx, leaf))| {
+            let blocks = leaf.timelock as u32;
+            let label = if leaf.fingerprints.len() == 1 && leaf.threshold == 1 {
+                format!("Recovery (after {})", format_timelock(blocks))
+            } else {
+                format!(
+                    "Recovery {}-of-{} (after {})",
+                    leaf.threshold,
+                    leaf.fingerprints.len(),
+                    format_timelock(blocks)
+                )
+            };
+            SpendingPath {
+                id: format!("recovery_{}", idx),
+                label,
+                description: Some(format!(
+                    "Activates {} blocks (~{}) after the most recent confirmed spend or coin receipt.",
+                    blocks,
+                    format_timelock(blocks)
+                )),
+                threshold: leaf.threshold as u32,
+                fingerprints: leaf.fingerprints.iter().map(|fp| fp.to_string()).collect(),
+                timelock_blocks: Some(blocks),
+                policy_path: external_policy_id.map(|id| {
+                    let mut m = BTreeMap::new();
+                    m.insert(id.to_string(), vec![leaf_idx + 1]);
+                    m
+                }),
+            }
+        })
+        .collect()
 }
 
 /// Approximate human-readable timelock. Bitcoin block intervals are 10
