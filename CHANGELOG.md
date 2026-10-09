@@ -4,10 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-09
+
 ### Fixed
 
 - **1-of-n multisig wallets can be created.** A lone `Multi` condition with `threshold = 1` (for example 1-of-2) was not recognised as a flat multisig — the classifier only took that branch for `threshold > 1` — so it fell through to the timelocked-policy builder and failed with `A Liana policy requires at least one recovery path`. Any `1 ≤ k ≤ n` over two or more keys now builds `wsh(sortedmulti(k, …))`, or `tr(NUMS, multi_a(k, …))` with the taproot preference, exactly as 2-of-n already did.
 - **`FinalizeWalletTransaction` no longer reports success for an under-signed PSBT.** The handler treated a successful `extract_tx` as proof of finalization, but `extract_tx` does not look at witnesses, so a 2-of-3 with one signature came back as finalized and was stored for broadcast. Every input must now carry a final witness, otherwise the call fails with `FAILED_PRECONDITION` and nothing is stored.
+
+### Changed
+
+- **Dependency bumps for two advisories.** `h2` 0.4.14 → 0.4.20 ([RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258), unbounded empty DATA frames) and `rustls` 0.23.40 → 0.23.45 ([RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285), TLS 1.3 handshake messages accepted across encryption-level boundaries). The `h2` 0.3 copy under the AWS SDK's legacy HTTP stack has no fixed release and is ignored in `deny.toml` with the reasoning recorded there.
 
 ## [0.6.0] - 2026-08-13
 
@@ -77,6 +83,7 @@ All notable changes to this project will be documented here. The format follows 
 - Repository extracted from the `sigvault` monorepo. Cargo workspace at the root with `crates/server` (the gRPC binary + library) and `contrib/liana`. The proto contract lives at `proto/walletrpc.proto` as the single source of truth.
 - License: BSD-3-Clause (single `LICENSE` file).
 
+[0.6.1]: https://github.com/n1rna/walletrs/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/n1rna/walletrs/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/n1rna/walletrs/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/n1rna/walletrs/compare/v0.3.0...v0.4.0
