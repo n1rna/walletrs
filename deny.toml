@@ -69,6 +69,14 @@ ignore = [
     { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.101.7 via aws-smithy; wildcard-name-constraint scope only matters under attacker-controlled CA, not S3" },
     { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.101.7 via aws-smithy; reachable panic in CRL parsing not exposed because AWS S3 doesn't serve CRLs" },
 
+    # `h2 0.3.27` comes in through the same legacy stack (`hyper 0.14`
+    # under aws-smithy-http-client). The fix for unbounded empty DATA
+    # frames ships only in `h2 >= 0.4.16`; the 0.3 line gets no release.
+    # Our own gRPC server and client are on the fixed `h2 0.4`. The 0.3
+    # copy only ever speaks to the configured S3 endpoint as a client, so
+    # exploiting it takes a hostile or compromised object store.
+    { id = "RUSTSEC-2026-0258", reason = "h2 0.3.27 via aws-smithy legacy hyper 0.14; client-side to the S3 endpoint only, our tonic stack is on fixed h2 0.4" },
+
     # --- Unmaintained ------------------------------------------------
 
     # `bincode 1.x` is no longer maintained upstream. It's a transitive
