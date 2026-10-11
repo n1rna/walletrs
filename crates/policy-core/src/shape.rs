@@ -386,12 +386,35 @@ fn build_timelocked_policy(
         }
     };
 
+    // A 1-of-n primary compiles to one taproot branch per key (one of
+    // them the internal key), so no single leaf stands for the condition
+    // and it cannot be addressed when spending.
+    if let PolicyPath::Multi { threshold: 1, keys } = &primary_path {
+        if keys.len() > 1 {
+            return Err(PolicyError::InvalidPolicy(format!(
+                "A 1-of-{} primary cannot be combined with timelocked recovery paths",
+                keys.len()
+            )));
+        }
+    }
+
     for (idx, rec) in recoveries.iter_mut().enumerate() {
         if rec.timelock == 0 {
             rec.timelock = 144 + (idx as u16) * 144;
         }
     }
     recoveries.sort_by_key(|r| r.timelock);
+    // The descriptor keys recovery paths by timelock; a duplicate would
+    // silently drop one of them.
+    if let Some(pair) = recoveries
+        .windows(2)
+        .find(|w| w[0].timelock == w[1].timelock)
+    {
+        return Err(PolicyError::InvalidPolicy(format!(
+            "Recovery conditions '{}' and '{}' share the {}-block timelock; each recovery needs its own",
+            pair[0].id, pair[1].id, pair[0].timelock
+        )));
+    }
 
     Ok(WalletShape::TimelockedPolicy {
         primary_id,

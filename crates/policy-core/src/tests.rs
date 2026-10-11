@@ -558,7 +558,7 @@ fn single_sig_descriptors_unchanged() {
 }
 
 #[test]
-fn one_of_n_primary_with_timelocked_recovery_stays_timelocked_policy() {
+fn one_of_n_primary_with_timelocked_recovery_is_refused() {
     let f1 = make_key("device-1", 1);
     let f2 = make_key("device-2", 2);
     let f3 = make_key("device-3", 3);
@@ -579,20 +579,9 @@ fn one_of_n_primary_with_timelocked_recovery_stays_timelocked_policy() {
         preferred_script_type: PreferredScriptType::Auto,
     };
 
-    let shape = shape::classify(&spec).unwrap();
-    match &shape {
-        WalletShape::TimelockedPolicy {
-            primary: shape::PolicyPath::Multi { threshold, keys },
-            recoveries,
-            ..
-        } => {
-            assert_eq!(*threshold, 1);
-            assert_eq!(keys.len(), 2);
-            assert_eq!(recoveries.len(), 1);
-        }
-        other => panic!("expected TimelockedPolicy, got {:?}", other),
-    }
-    let pair = descriptor::build(&shape).unwrap();
-    assert!(pair.external.starts_with("tr("));
-    assert!(pair.policy_descriptor.is_some());
+    // The compiler spreads a 1-of-n primary over the internal key and one
+    // leaf per remaining key, so `taproot::extract` finds no leaf for the
+    // condition. Refuse the spec before a descriptor is built.
+    let err = shape::classify(&spec).unwrap_err().to_string();
+    assert!(err.contains("1-of-2 primary"), "unexpected error: {}", err);
 }

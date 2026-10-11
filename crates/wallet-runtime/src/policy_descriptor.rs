@@ -9,19 +9,24 @@
 //! `IncompatibleDesc`. `policy-core` builds exactly that descriptor for
 //! `is_unspendable` primaries, so those wallets need their own reader.
 //!
-//! `PolicyDescriptor::from_str` tries Liana first and falls back to
-//! `RecoveryOnlyDescriptor`, which accepts only `tr(UNSPENDABLE, TREE)`
-//! where every leaf is a Liana recovery path (keys behind `older`).
+//! `PolicyDescriptor::from_str` tries `RecoveryOnlyDescriptor` first,
+//! which accepts only `tr(UNSPENDABLE, TREE)` where every leaf is a Liana
+//! recovery path (keys behind `older`), and falls back to Liana.
+//!
+//! The taptree's leaf order is chosen by the miniscript policy compiler,
+//! not by timelock. BDK lists the leaves as policy children in that same
+//! order, so `taptree_leaves` is how a spending path is mapped to its
+//! policy child for both variants.
 
 use std::str::FromStr;
 
-use bdk_wallet::bitcoin::bip32::{Fingerprint, Xpub};
+use bdk_wallet::bitcoin::bip32::Fingerprint;
+use bdk_wallet::bitcoin::secp256k1::PublicKey;
 use bdk_wallet::bitcoin::taproot::{LeafVersion, TapLeafHash};
-use bdk_wallet::bitcoin::Network;
 use liana::descriptors::{LianaDescriptor, PathInfo};
 use liana::miniscript::descriptor::{Descriptor, DescriptorPublicKey};
 use liana::miniscript::policy::Liftable;
-use policy_core::unspendable_primary_xpub;
+use policy_core::BIP341_NUMS_HEX;
 
 use crate::error::WalletRuntimeError;
 
@@ -47,16 +52,17 @@ impl FromStr for PolicyDescriptor {
     type Err = WalletRuntimeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let liana_err = match LianaDescriptor::from_str(s) {
-            Ok(desc) => return Ok(Self::Liana(desc)),
-            Err(e) => e,
-        };
-        match RecoveryOnlyDescriptor::from_str(s) {
-            Ok(desc) => Ok(Self::RecoveryOnly(desc)),
-            // The Liana error is the one worth reporting: the fallback
-            // only recognises a single narrow shape.
-            Err(_) => Err(WalletRuntimeError::InvalidDescriptor(liana_err.to_string())),
+        // Recovery-only goes first: Liana only recognises the unspendable
+        // internal key when its chain code was derived from the leaf keys
+        // in taptree order, and otherwise reads it as a real primary key.
+        if let Ok(desc) = RecoveryOnlyDescriptor::from_str(s) {
+            return Ok(Self::RecoveryOnly(desc));
         }
+        // The Liana error is the one worth reporting: the recovery-only
+        // reader only recognises a single narrow shape.
+        LianaDescriptor::from_str(s)
+            .map(Self::Liana)
+            .map_err(|e| WalletRuntimeError::InvalidDescriptor(e.to_string()))
     }
 }
 
@@ -108,42 +114,15 @@ impl FromStr for RecoveryOnlyDescriptor {
             return Err(invalid("no recovery leaves"));
         }
 
-        // The internal key must be the unspendable xpub derived from the
-        // leaf keys, otherwise it is a real key and this is not a
-        // recovery-only wallet.
-        let mut leaf_xpubs = Vec::new();
-        for (_, ms) in tr.iter_scripts() {
-            for key in ms.iter_pk() {
-                leaf_xpubs.push(multi_xpub(&key).ok_or_else(|| invalid("non-multipath key"))?);
-            }
-        }
-        let first = leaf_xpubs
-            .first()
-            .ok_or_else(|| invalid("no keys in recovery leaves"))?;
-        // Only the network kind ends up in the xpub.
-        let network = if first.network.is_mainnet() {
-            Network::Bitcoin
-        } else {
-            Network::Testnet
-        };
-        let unspendable = unspendable_primary_xpub(&leaf_xpubs, network);
-        if multi_xpub(tr.internal_key()) != Some(unspendable) {
+        // The internal key must sit on the BIP-341 NUMS point, otherwise
+        // it is a real key and this is not a recovery-only wallet. The
+        // chain code is not checked: it only makes the key unique per
+        // wallet, and wallets differ in the leaf order they derived it from.
+        if !is_unspendable(tr.internal_key()) {
             return Err(invalid("internal key is spendable"));
         }
 
-        // Leaf hashes do not depend on the derivation index, but computing
-        // them needs definite keys: use the receive descriptor at child 0,
-        // like `policy_core::taproot::extract` does.
-        let receive = desc
-            .clone()
-            .into_single_descriptors()
-            .map_err(|e| invalid(e.to_string()))?
-            .into_iter()
-            .next()
-            .ok_or_else(|| invalid("not a multipath descriptor"))?;
-        let derived = receive
-            .at_derivation_index(0)
-            .map_err(|e| invalid(e.to_string()))?;
+        let derived = derive_receive(&desc).map_err(|e| invalid(e.to_string()))?;
         let derived_tr = match &derived {
             Descriptor::Tr(tr) => tr,
             _ => return Err(invalid("not a taproot descriptor")),
@@ -160,10 +139,8 @@ impl FromStr for RecoveryOnlyDescriptor {
             let (threshold, origins) = path.thresh_origins();
             let mut fingerprints: Vec<Fingerprint> = origins.into_keys().collect();
             fingerprints.sort();
-            let leaf_hash =
-                TapLeafHash::from_script(&derived_ms.encode(), LeafVersion::TapScript).to_string();
             leaves.push(RecoveryLeaf {
-                leaf_hash,
+                leaf_hash: leaf_hash(derived_ms),
                 timelock,
                 threshold,
                 fingerprints,
@@ -181,11 +158,92 @@ fn invalid(reason: impl Into<String>) -> WalletRuntimeError {
     ))
 }
 
-fn multi_xpub(key: &DescriptorPublicKey) -> Option<Xpub> {
-    match key {
-        DescriptorPublicKey::MultiXPub(k) => Some(k.xkey),
-        _ => None,
+fn is_unspendable(key: &DescriptorPublicKey) -> bool {
+    let nums = PublicKey::from_str(BIP341_NUMS_HEX).expect("valid NUMS point");
+    matches!(key, DescriptorPublicKey::MultiXPub(k) if k.xkey.public_key == nums)
+}
+
+/// One script leaf of a stored taproot policy descriptor.
+pub(crate) struct TapLeaf {
+    pub leaf_hash: String,
+    /// Relative timelock the leaf enforces; `None` for a primary leaf.
+    pub timelock: Option<u16>,
+}
+
+impl TapLeaf {
+    /// BDK lists the key spend as policy child 0 and the leaves after it.
+    pub fn policy_child_index(leaves: &[TapLeaf], leaf_hash: &str) -> Option<usize> {
+        leaves
+            .iter()
+            .position(|leaf| leaf.leaf_hash.eq_ignore_ascii_case(leaf_hash))
+            .map(|idx| idx + 1)
     }
+}
+
+/// Leaves of a multipath taproot descriptor in taptree order. `None` when
+/// the descriptor is not taproot.
+pub(crate) fn taptree_leaves(descriptor: &str) -> Result<Option<Vec<TapLeaf>>, WalletRuntimeError> {
+    let desc = Descriptor::<DescriptorPublicKey>::from_str(descriptor)
+        .map_err(|e| WalletRuntimeError::InvalidDescriptor(e.to_string()))?;
+    let tr = match &desc {
+        Descriptor::Tr(tr) => tr,
+        _ => return Ok(None),
+    };
+    let derived = derive_receive(&desc)?;
+    let derived_tr = match &derived {
+        Descriptor::Tr(tr) => tr,
+        _ => return Ok(None),
+    };
+
+    let mut leaves = Vec::new();
+    for ((_, ms), (_, derived_ms)) in tr.iter_scripts().zip(derived_tr.iter_scripts()) {
+        let policy = ms
+            .lift()
+            .map_err(|e| WalletRuntimeError::InvalidDescriptor(e.to_string()))?;
+        let timelock = match policy.relative_timelocks().first() {
+            Some(blocks) => Some(u16::try_from(*blocks).map_err(|_| {
+                WalletRuntimeError::InvalidDescriptor(format!(
+                    "timelock of {} blocks is out of range",
+                    blocks
+                ))
+            })?),
+            None => None,
+        };
+        leaves.push(TapLeaf {
+            leaf_hash: leaf_hash(derived_ms),
+            timelock,
+        });
+    }
+    Ok(Some(leaves))
+}
+
+/// Leaf hashes do not depend on the derivation index, but computing them
+/// needs definite keys: use the receive descriptor at child 0, like
+/// `policy_core::taproot::extract` does.
+fn derive_receive(
+    desc: &Descriptor<DescriptorPublicKey>,
+) -> Result<Descriptor<liana::miniscript::DefiniteDescriptorKey>, WalletRuntimeError> {
+    let receive = desc
+        .clone()
+        .into_single_descriptors()
+        .map_err(|e| WalletRuntimeError::InvalidDescriptor(e.to_string()))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            WalletRuntimeError::InvalidDescriptor("not a multipath descriptor".to_string())
+        })?;
+    receive
+        .at_derivation_index(0)
+        .map_err(|e| WalletRuntimeError::InvalidDescriptor(e.to_string()))
+}
+
+fn leaf_hash(
+    ms: &liana::miniscript::Miniscript<
+        liana::miniscript::DefiniteDescriptorKey,
+        liana::miniscript::Tap,
+    >,
+) -> String {
+    TapLeafHash::from_script(&ms.encode(), LeafVersion::TapScript).to_string()
 }
 
 fn path_keys(path: &PathInfo) -> Vec<DescriptorPublicKey> {

@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Recovery paths are built with their own timelock when a wallet has three or more recoveries.** A leaf hash was mapped to its BDK policy child by assuming the taproot tree lists recoveries in ascending-timelock order. The policy compiler picks that order, and from three recoveries on it differs: every recovery was built with another recovery's `nSequence`, so the PSBT could be signed but never finalized. `FundWalletTransaction` and `list_spending_paths` now locate each path by its leaf's position in the taptree. A multisig primary resolves to its own leaf instead of the unspendable key-spend child. Descriptors and addresses are unchanged.
+- **Recovery-only wallets with three or more recoveries are read as recovery-only.** The unspendable internal key was recognised by recomputing its chain code from the leaf keys in taptree order, which only matches the order it was built from for small trees. Larger wallets were read as having a real primary key with fingerprint `00000000`, and listed a primary path nobody can sign. The key is now recognised by sitting on the BIP-341 NUMS point.
+
+### Changed
+
+- **A 1-of-n primary combined with recovery paths is refused with a clear error.** The compiler spreads such a primary over the internal key and one leaf per remaining key, so creation already failed, with `Failed to extract taproot leaf hash for primary condition`. It now fails at classification with a message naming the cause.
+- **Two recoveries with the same timelock are refused with a clear error.** One of them was silently dropped from the descriptor and creation then failed on the missing leaf.
+
 ## [0.6.2] - 2026-10-10
 
 ### Fixed
