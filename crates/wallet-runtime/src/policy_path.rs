@@ -7,28 +7,22 @@
 //! - `"keypath"` — the primary spends via the taproot internal key. Resolves
 //!   to `vec![0]` regardless of the descriptor structure.
 //! - A hex-encoded `TapLeafHash` — the primary or one of the recoveries
-//!   spends via a script leaf in the taptree. Requires a `LianaDescriptor`
-//!   (the multipath policy descriptor) so we can derive the child-zero
-//!   PSBT input, populate `tap_key_origins` via `update_psbt_in`, and
-//!   match the leaf hash against each path's signer fingerprints.
+//!   spends via a script leaf in the taptree. Requires the multipath
+//!   policy descriptor so the leaf can be located in the taptree.
 //!
 //! Returns the `policy_path` map BDK's `TxBuilder::policy_path` consumes.
-//! BDK orders policy children as `[primary, recovery_1, recovery_2, …]` —
-//! matching the upstream `LianaPolicy`'s `BTreeMap<u16, _>` recovery
-//! iteration order (ascending timelock) — so the primary's leaf hash
-//! always resolves to `vec![0]` and the Nth recovery to `vec![N]`.
+//! BDK orders a taproot descriptor's policy children as `[key spend,
+//! leaf_0, leaf_1, …]` with the leaves in taptree order, which the policy
+//! compiler picks and which is *not* ascending timelock. A leaf hash
+//! therefore resolves to one plus its position in the taptree.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 
-use bdk_wallet::bitcoin::bip32::{ChildNumber, Fingerprint};
-use bdk_wallet::bitcoin::hashes::Hash;
-use bdk_wallet::bitcoin::psbt::Input as PsbtInput;
-use bdk_wallet::bitcoin::secp256k1;
 use bdk_wallet::KeychainKind;
-use liana::descriptors::{LianaDescriptor, PathInfo};
+use liana::descriptors::LianaDescriptor;
 
 use crate::error::WalletRuntimeError;
-use crate::policy_descriptor::{PolicyDescriptor, RecoveryOnlyDescriptor};
+use crate::policy_descriptor::{taptree_leaves, PolicyDescriptor, RecoveryOnlyDescriptor, TapLeaf};
 
 /// Resolve a leaf hash against a wallet's stored policy descriptor.
 ///
@@ -106,62 +100,16 @@ pub fn resolve_policy_path_from_leaf(
         ))
     })?;
 
-    let fp_to_leaves = build_fingerprint_leaf_map(descriptor)?;
-    let policy = descriptor.policy();
-
-    if path_owns_leaf(policy.primary_path(), leaf_hash, &fp_to_leaves) {
-        validate_policy_path(&external_policy, &[0])?;
-        policy_path.insert(external_policy.id.clone(), vec![0]);
-        return Ok(policy_path);
-    }
-
-    for (recovery_idx, (_timelock, path_info)) in policy.recovery_paths().iter().enumerate() {
-        if path_owns_leaf(path_info, leaf_hash, &fp_to_leaves) {
-            let policy_child_index = recovery_idx + 1;
-            validate_policy_path(&external_policy, &[policy_child_index])?;
-            policy_path.insert(external_policy.id.clone(), vec![policy_child_index]);
-            return Ok(policy_path);
-        }
-    }
-
-    Err(WalletRuntimeError::PolicyPath(format!(
-        "leaf hash '{}' does not match any spending path in the descriptor",
-        leaf_hash
-    )))
-}
-
-fn build_fingerprint_leaf_map(
-    descriptor: &LianaDescriptor,
-) -> Result<HashMap<Fingerprint, HashSet<String>>, WalletRuntimeError> {
-    let secp = secp256k1::Secp256k1::verification_only();
-    let child = ChildNumber::from_normal_idx(0)
-        .map_err(|e| WalletRuntimeError::PolicyPath(format!("child number: {}", e)))?;
-    let derived = descriptor.receive_descriptor().derive(child, &secp);
-
-    let mut psbt_in = PsbtInput::default();
-    derived.update_psbt_in(&mut psbt_in);
-
-    let mut map: HashMap<Fingerprint, HashSet<String>> = HashMap::new();
-    for (leaf_hashes, (fp, _path)) in psbt_in.tap_key_origins.values() {
-        let entry = map.entry(*fp).or_default();
-        for lh in leaf_hashes {
-            entry.insert(hex::encode(lh.to_byte_array()));
-        }
-    }
-    Ok(map)
-}
-
-fn path_owns_leaf(
-    path_info: &PathInfo,
-    leaf_hash: &str,
-    fp_to_leaves: &HashMap<Fingerprint, HashSet<String>>,
-) -> bool {
-    let (_, fg_map) = path_info.thresh_origins();
-    fg_map.keys().any(|fp| {
-        fp_to_leaves
-            .get(fp)
-            .is_some_and(|set| set.contains(leaf_hash))
-    })
+    let leaves = taptree_leaves(&descriptor.to_string())?.unwrap_or_default();
+    let child_index = TapLeaf::policy_child_index(&leaves, leaf_hash).ok_or_else(|| {
+        WalletRuntimeError::PolicyPath(format!(
+            "leaf hash '{}' does not match any spending path in the descriptor",
+            leaf_hash
+        ))
+    })?;
+    validate_policy_path(&external_policy, &[child_index])?;
+    policy_path.insert(external_policy.id.clone(), vec![child_index]);
+    Ok(policy_path)
 }
 
 fn validate_policy_path(

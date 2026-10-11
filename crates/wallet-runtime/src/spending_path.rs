@@ -17,7 +17,7 @@ use std::str::FromStr;
 use liana::descriptors::LianaDescriptor;
 
 use crate::error::WalletRuntimeError;
-use crate::policy_descriptor::{PolicyDescriptor, RecoveryOnlyDescriptor};
+use crate::policy_descriptor::{taptree_leaves, PolicyDescriptor, RecoveryOnlyDescriptor};
 
 /// One spending option for the user. Single-sig and multisig
 /// descriptors emit a single path; timelocked-policy descriptors emit
@@ -145,6 +145,24 @@ fn timelocked_paths(
     let policy = desc.policy();
     let mut out = Vec::new();
 
+    // BDK policy child of the path enforcing `timelock` (`None` is the
+    // primary). Taproot leaves sit in the order the policy compiler chose,
+    // after the key spend at child 0; a primary with no leaf of its own
+    // is the key spend.
+    let leaves = taptree_leaves(&desc.to_string())?;
+    let child_index = |timelock: Option<u16>, recovery_idx: usize| match &leaves {
+        Some(leaves) => match leaves.iter().position(|leaf| leaf.timelock == timelock) {
+            Some(position) => Ok(position + 1),
+            None if timelock.is_none() => Ok(0),
+            None => Err(WalletRuntimeError::PolicyPath(format!(
+                "no taproot leaf enforces the {}-block recovery timelock",
+                timelock.unwrap_or_default()
+            ))),
+        },
+        None => Ok(timelock.map_or(0, |_| recovery_idx + 1)),
+    };
+    let primary_child = child_index(None, 0)?;
+
     // Primary path.
     let (p_thresh, p_origins) = policy.primary_path().thresh_origins();
     let p_fps: Vec<String> = p_origins.keys().map(|fp| fp.to_string()).collect();
@@ -161,14 +179,14 @@ fn timelocked_paths(
         timelock_blocks: None,
         policy_path: external_policy_id.map(|id| {
             let mut m = BTreeMap::new();
-            m.insert(id.to_string(), vec![0]);
+            m.insert(id.to_string(), vec![primary_child]);
             m
         }),
     });
 
-    // Recovery paths in ascending-timelock order, matching BDK's
-    // policy-child indexing (see policy_path.rs).
+    // Recovery paths in ascending-timelock order.
     for (idx, (timelock, path_info)) in policy.recovery_paths().iter().enumerate() {
+        let recovery_child = child_index(Some(*timelock), idx)?;
         let (thresh, origins) = path_info.thresh_origins();
         let fps: Vec<String> = origins.keys().map(|fp| fp.to_string()).collect();
         let blocks = *timelock as u32;
@@ -195,7 +213,7 @@ fn timelocked_paths(
             timelock_blocks: Some(blocks),
             policy_path: external_policy_id.map(|id| {
                 let mut m = BTreeMap::new();
-                m.insert(id.to_string(), vec![idx + 1]);
+                m.insert(id.to_string(), vec![recovery_child]);
                 m
             }),
         });

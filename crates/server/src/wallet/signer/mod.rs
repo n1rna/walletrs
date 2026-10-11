@@ -183,9 +183,8 @@ pub fn sign_psbt_with_taproot_support(
 /// - `"keypath"` — the primary spends via the taproot internal key.
 /// - A hex-encoded `TapLeafHash` — primary or recovery via a script leaf.
 ///
-/// The policy descriptor is required for hex leaf hashes so we can derive
-/// the child-zero PSBT input and match leaf hashes against signer
-/// fingerprints.
+/// The policy descriptor is required for hex leaf hashes so the leaf can
+/// be located in the taptree.
 pub fn resolve_policy_path_from_leaf(
     wallet: &bdk_wallet::Wallet,
     leaf_hash: &str,
@@ -303,8 +302,21 @@ mod tests {
         )
     }
 
+    fn enforced_csv(
+        wallet: &Wallet,
+        path: &BTreeMap<String, Vec<usize>>,
+    ) -> Option<bdk_wallet::bitcoin::Sequence> {
+        wallet
+            .policies(bdk_wallet::KeychainKind::External)
+            .unwrap()
+            .expect("external policy")
+            .get_condition(path)
+            .expect("valid policy path")
+            .csv
+    }
+
     #[test]
-    fn primary_multisig_leaf_resolves_to_zero() {
+    fn primary_multisig_leaf_resolves_to_its_own_untimelocked_child() {
         let (wallet, policy_desc, leaves) = build_timelocked_wallet();
         let primary = leaves
             .iter()
@@ -324,11 +336,16 @@ mod tests {
             resolve_policy_path_from_leaf(&wallet, &primary.leaf_hash, Some(&policy_desc))
                 .expect("resolve primary leaf");
         let path = resolved.values().next().expect("policy path entry");
-        assert_eq!(path, &vec![0]);
+        assert_ne!(
+            path,
+            &vec![0],
+            "child 0 is the unspendable key spend, not the primary's leaf"
+        );
+        assert_eq!(enforced_csv(&wallet, &resolved), None);
     }
 
     #[test]
-    fn recovery_leaf_resolves_to_one() {
+    fn recovery_leaf_resolves_to_the_child_enforcing_its_timelock() {
         let (wallet, policy_desc, leaves) = build_timelocked_wallet();
         let recovery = leaves
             .iter()
@@ -338,8 +355,10 @@ mod tests {
         let resolved =
             resolve_policy_path_from_leaf(&wallet, &recovery.leaf_hash, Some(&policy_desc))
                 .expect("resolve recovery leaf");
-        let path = resolved.values().next().expect("policy path entry");
-        assert_eq!(path, &vec![1]);
+        assert_eq!(
+            enforced_csv(&wallet, &resolved),
+            Some(bdk_wallet::bitcoin::Sequence::from_height(144))
+        );
     }
 
     #[test]
