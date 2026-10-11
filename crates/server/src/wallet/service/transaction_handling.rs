@@ -298,9 +298,16 @@ pub async fn fund_wallet_transaction(
             let fee_rate = bdk_wallet::bitcoin::FeeRate::from_sat_per_vb(2)
                 .expect("FeeRate::from_sat_per_vb(2) is infallible for this constant");
 
-            let policy_path = if !req.selected_leaf_hash.is_empty() {
+            // A SegWit v0 policy always needs a branch chosen; with no
+            // selector that is the primary. Taproot callers name the
+            // primary explicitly (`keypath`).
+            let policy_desc = load_policy_descriptor(&req.wallet_id);
+            let segwit_policy = policy_desc
+                .as_ref()
+                .and_then(|desc| desc.as_liana())
+                .is_some_and(|desc| !desc.is_taproot());
+            let policy_path = if !req.selected_leaf_hash.is_empty() || segwit_policy {
                 log::debug!("Selected leaf hash: {}", req.selected_leaf_hash);
-                let policy_desc = load_policy_descriptor(&req.wallet_id);
                 resolve_policy_path_from_leaf(
                     &wallet,
                     &req.selected_leaf_hash,
@@ -1637,6 +1644,364 @@ mod tests {
             assert_k_of_n_lifecycle(threshold, key_count, PreferredScriptType::ScriptTypeTaproot)
                 .await;
         }
+    }
+
+    /// A 1-of-3 primary with a timelocked recovery: any one primary key
+    /// spends on its own. The compiler makes the first key the taproot
+    /// internal key and gives each of the others a leaf, so the condition
+    /// is addressed as `keypath` and each device signs whichever way its
+    /// key allows.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lifecycle_one_of_n_primary_with_recovery_spends_with_any_primary_key() {
+        use crate::proto::pb::{
+            CreateGenericWalletRequest, PolicyType, PreferredScriptType, SpendingCondition,
+        };
+        use crate::wallet::service::test_support::make_system_key;
+        use crate::wallet::service::wallet_creation::create_generic_wallet;
+
+        setup();
+        for signer in 0..4usize {
+            let user = unique_id("user");
+            let wallet = unique_id("wallet");
+            let devices: Vec<String> = (0..4).map(|_| unique_id("dev")).collect();
+            for device in &devices {
+                let _ = make_system_key(&user, device).await;
+            }
+            let created = create_generic_wallet(Request::new(CreateGenericWalletRequest {
+                user_id: user.clone(),
+                wallet_id: wallet.clone(),
+                spending_conditions: vec![
+                    SpendingCondition {
+                        id: "primary".to_string(),
+                        is_primary: true,
+                        timelock: 0,
+                        threshold: 1,
+                        policy: PolicyType::Multi as i32,
+                        managed_key_ids: devices[..3].to_vec(),
+                        is_unspendable: false,
+                    },
+                    SpendingCondition {
+                        id: "recovery".to_string(),
+                        is_primary: false,
+                        timelock: 144,
+                        threshold: 1,
+                        policy: PolicyType::Single as i32,
+                        managed_key_ids: devices[3..].to_vec(),
+                        is_unspendable: false,
+                    },
+                ],
+                network: "testnet".to_string(),
+                preferred_script_type: PreferredScriptType::ScriptTypeAuto as i32,
+            }))
+            .await
+            .unwrap_or_else(|e| panic!("create must succeed: {}", e.message()))
+            .into_inner();
+
+            let leaf_of = |condition: &str| {
+                created
+                    .taproot_leaf_info
+                    .iter()
+                    .find(|l| l.spending_condition_id == condition)
+                    .unwrap_or_else(|| panic!("no leaf for {}", condition))
+                    .leaf_hash
+                    .clone()
+            };
+            assert_eq!(leaf_of("primary"), "keypath");
+
+            // Devices 0..3 spend through the primary, device 3 through
+            // the recovery.
+            let through_recovery = signer == 3;
+            let label = format!("device {}", signer);
+            let _funding_txid = inject_unconfirmed_utxo(&wallet, 200_000).await;
+            let mut req = fund_req(&wallet, EXTERNAL_TESTNET_ADDRESS, 50_000);
+            req.selected_leaf_hash = leaf_of(if through_recovery {
+                "recovery"
+            } else {
+                "primary"
+            });
+            let fund_resp = fund_wallet_transaction(Request::new(req))
+                .await
+                .unwrap_or_else(|e| panic!("{}: fund must succeed: {}", label, e.message()))
+                .into_inner();
+
+            // External signers get the pruned PSBT: it must still name
+            // every key of the chosen path, and only those.
+            let pruned = Psbt::from_str(&fund_resp.pruned_psbt).expect("pruned PSBT");
+            assert_eq!(
+                pruned.inputs[0].tap_key_origins.len(),
+                if through_recovery { 1 } else { 3 },
+                "{}: pruned PSBT keeps the keys of the path being spent",
+                label
+            );
+
+            let sign_resp = sign_wallet_transaction(Request::new(SignWalletTransactionRequest {
+                wallet_id: wallet.clone(),
+                txid: fund_resp.txid.clone(),
+                device_id: devices[signer].clone(),
+            }))
+            .await
+            .unwrap_or_else(|e| panic!("{}: sign must succeed: {}", label, e.message()))
+            .into_inner();
+            let signed = Psbt::from_str(&sign_resp.tx_raw).expect("sign tx_raw is valid PSBT");
+            let input = &signed.inputs[0];
+            assert_eq!(
+                (input.tap_key_sig.is_some(), input.tap_script_sigs.len()),
+                if signer == 0 { (true, 0) } else { (false, 1) },
+                "{}: the internal key signs the key path, every other key its own leaf",
+                label
+            );
+
+            let final_resp =
+                finalize_wallet_transaction(Request::new(FinalizeWalletTransactionRequest {
+                    wallet_id: wallet,
+                    txid: fund_resp.txid,
+                }))
+                .await
+                .unwrap_or_else(|e| panic!("{}: finalize must succeed: {}", label, e.message()))
+                .into_inner();
+            let finalized =
+                Psbt::from_str(&final_resp.tx_raw).expect("finalize tx_raw is valid PSBT");
+            let witness = finalized.inputs[0]
+                .final_script_witness
+                .as_ref()
+                .unwrap_or_else(|| panic!("{}: input must carry a final witness", label));
+            assert_eq!(
+                witness.len(),
+                if signer == 0 { 1 } else { 3 },
+                "{}: key-path witness is one signature, a leaf adds script and control block",
+                label
+            );
+            let tx = finalized
+                .extract_tx()
+                .unwrap_or_else(|e| panic!("{}: must extract: {}", label, e));
+            assert_eq!(
+                tx.input[0].sequence.is_relative_lock_time(),
+                through_recovery,
+                "{}: only the recovery spend commits to a relative timelock",
+                label
+            );
+        }
+    }
+
+    /// Create → Fund → Sign → Finalize through the real handlers for a
+    /// timelocked policy whose keys are all system-managed. `conditions`
+    /// is `(id, timelock, threshold, device indexes)`, the first being
+    /// the primary; `spends` is `(condition id, signing device indexes)`.
+    /// Every spend runs against a wallet of its own. With
+    /// `empty_primary_selector` the primary is funded without a selector.
+    async fn assert_policy_lifecycle(
+        label: &str,
+        script_type: crate::proto::pb::PreferredScriptType,
+        conditions: &[(&str, u32, u32, &[usize])],
+        spends: &[(&str, &[usize])],
+        empty_primary_selector: bool,
+    ) {
+        use crate::proto::pb::{CreateGenericWalletRequest, PolicyType, SpendingCondition};
+        use crate::wallet::service::test_support::make_system_key;
+        use crate::wallet::service::wallet_creation::create_generic_wallet;
+
+        setup();
+        let device_count = conditions
+            .iter()
+            .flat_map(|(_, _, _, devices)| devices.iter())
+            .max()
+            .map_or(0, |max| max + 1);
+
+        for (condition, signers) in spends {
+            let label = format!("{} / {} signed by {:?}", label, condition, signers);
+            let user = unique_id("user");
+            let wallet = unique_id("wallet");
+            let devices: Vec<String> = (0..device_count).map(|_| unique_id("dev")).collect();
+            for device in &devices {
+                let _ = make_system_key(&user, device).await;
+            }
+            let created = create_generic_wallet(Request::new(CreateGenericWalletRequest {
+                user_id: user.clone(),
+                wallet_id: wallet.clone(),
+                spending_conditions: conditions
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, (id, timelock, threshold, keys))| SpendingCondition {
+                        id: id.to_string(),
+                        is_primary: idx == 0,
+                        timelock: *timelock,
+                        threshold: *threshold,
+                        policy: if keys.len() == 1 {
+                            PolicyType::Single
+                        } else {
+                            PolicyType::Multi
+                        } as i32,
+                        managed_key_ids: keys.iter().map(|k| devices[*k].clone()).collect(),
+                        is_unspendable: false,
+                    })
+                    .collect(),
+                network: "testnet".to_string(),
+                preferred_script_type: script_type as i32,
+            }))
+            .await
+            .unwrap_or_else(|e| panic!("{}: create must succeed: {}", label, e.message()))
+            .into_inner();
+
+            let is_primary = *condition == conditions[0].0;
+            let selector = if is_primary && empty_primary_selector {
+                String::new()
+            } else {
+                created
+                    .taproot_leaf_info
+                    .iter()
+                    .find(|l| l.spending_condition_id == *condition)
+                    .unwrap_or_else(|| panic!("{}: no selector", label))
+                    .leaf_hash
+                    .clone()
+            };
+
+            let _funding_txid = inject_unconfirmed_utxo(&wallet, 200_000).await;
+            let mut req = fund_req(&wallet, EXTERNAL_TESTNET_ADDRESS, 50_000);
+            req.selected_leaf_hash = selector;
+            let fund_resp = fund_wallet_transaction(Request::new(req))
+                .await
+                .unwrap_or_else(|e| panic!("{}: fund must succeed: {}", label, e.message()))
+                .into_inner();
+
+            for signer in signers.iter() {
+                sign_wallet_transaction(Request::new(SignWalletTransactionRequest {
+                    wallet_id: wallet.clone(),
+                    txid: fund_resp.txid.clone(),
+                    device_id: devices[*signer].clone(),
+                }))
+                .await
+                .unwrap_or_else(|e| panic!("{}: sign must succeed: {}", label, e.message()));
+            }
+
+            let final_resp =
+                finalize_wallet_transaction(Request::new(FinalizeWalletTransactionRequest {
+                    wallet_id: wallet,
+                    txid: fund_resp.txid,
+                }))
+                .await
+                .unwrap_or_else(|e| panic!("{}: finalize must succeed: {}", label, e.message()))
+                .into_inner();
+            let tx = Psbt::from_str(&final_resp.tx_raw)
+                .expect("finalize tx_raw is valid PSBT")
+                .extract_tx()
+                .unwrap_or_else(|e| panic!("{}: must extract: {}", label, e));
+            let timelock = conditions
+                .iter()
+                .find(|(id, ..)| id == condition)
+                .map(|(_, timelock, ..)| *timelock)
+                .expect("known condition");
+            if timelock == 0 {
+                assert!(
+                    !tx.input[0].sequence.is_relative_lock_time(),
+                    "{}: primary spend must not commit to a relative timelock",
+                    label
+                );
+            } else {
+                assert_eq!(
+                    tx.input[0].sequence,
+                    bdk_wallet::bitcoin::Sequence::from_height(timelock as u16),
+                    "{}: spend must commit to this path's own timelock",
+                    label
+                );
+            }
+        }
+    }
+
+    /// One set of signers in every condition, with a falling threshold:
+    /// each device holds a separate key per condition.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lifecycle_decaying_multisig_spends_through_every_path() {
+        use crate::proto::pb::PreferredScriptType;
+        let conditions: &[(&str, u32, u32, &[usize])] = &[
+            ("primary", 0, 3, &[0, 1, 2]),
+            ("two", 144, 2, &[0, 1, 2]),
+            ("one", 288, 1, &[0, 1, 2]),
+        ];
+        let spends: &[(&str, &[usize])] =
+            &[("primary", &[0, 1, 2]), ("two", &[2, 0]), ("one", &[1])];
+        for script_type in [
+            PreferredScriptType::ScriptTypeAuto,
+            PreferredScriptType::ScriptTypeSegwitV0,
+        ] {
+            assert_policy_lifecycle(
+                &format!("decaying multisig {:?}", script_type),
+                script_type,
+                conditions,
+                spends,
+                false,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lifecycle_segwit_timelocked_policy_spends_through_every_path() {
+        use crate::proto::pb::PreferredScriptType;
+        let conditions: &[(&str, u32, u32, &[usize])] = &[
+            ("primary", 0, 2, &[0, 1, 2]),
+            ("heirs", 144, 2, &[3, 4]),
+            ("lawyer", 288, 1, &[5]),
+        ];
+        let spends: &[(&str, &[usize])] =
+            &[("primary", &[2, 1]), ("heirs", &[3, 4]), ("lawyer", &[5])];
+        // The primary of a SegWit v0 policy is also what an empty
+        // selector means.
+        for empty_primary_selector in [false, true] {
+            assert_policy_lifecycle(
+                "segwit policy",
+                PreferredScriptType::ScriptTypeSegwitV0,
+                conditions,
+                spends,
+                empty_primary_selector,
+            )
+            .await;
+        }
+    }
+
+    /// A lone 1-of-1 "multi" condition is a single-key wallet.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lifecycle_one_of_one_multi_is_a_single_sig_wallet() {
+        use crate::wallet::service::test_support::make_k_of_n_wallet;
+
+        let user = unique_id("user");
+        let wallet = unique_id("wallet");
+        let device = unique_id("dev");
+        make_k_of_n_wallet(
+            &user,
+            &wallet,
+            1,
+            &[device.as_str()],
+            crate::proto::pb::PreferredScriptType::ScriptTypeAuto,
+        )
+        .await;
+        let _funding_txid = inject_unconfirmed_utxo(&wallet, 200_000).await;
+        let fund_resp = fund_wallet_transaction(Request::new(fund_req(
+            &wallet,
+            EXTERNAL_TESTNET_ADDRESS,
+            50_000,
+        )))
+        .await
+        .expect("fund must succeed")
+        .into_inner();
+        sign_wallet_transaction(Request::new(SignWalletTransactionRequest {
+            wallet_id: wallet.clone(),
+            txid: fund_resp.txid.clone(),
+            device_id: device,
+        }))
+        .await
+        .expect("sign must succeed");
+        let final_resp =
+            finalize_wallet_transaction(Request::new(FinalizeWalletTransactionRequest {
+                wallet_id: wallet,
+                txid: fund_resp.txid,
+            }))
+            .await
+            .expect("finalize must succeed")
+            .into_inner();
+        Psbt::from_str(&final_resp.tx_raw)
+            .expect("valid PSBT")
+            .extract_tx()
+            .expect("extracts");
     }
 
     #[tokio::test(flavor = "multi_thread")]

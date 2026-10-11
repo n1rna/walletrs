@@ -282,7 +282,7 @@ fn classifies_unspendable_primary_to_nums_xpub() {
 }
 
 #[test]
-fn rejects_segwit_v0_for_timelocked_policy() {
+fn segwit_v0_timelocked_policy_builds_a_wsh_descriptor() {
     let f1 = make_key("device-1", 1);
     let f2 = make_key("device-2", 2);
     let spec = WalletSpec {
@@ -294,7 +294,205 @@ fn rejects_segwit_v0_for_timelocked_policy() {
         managed_keys: keys(&[&f1, &f2]),
         preferred_script_type: PreferredScriptType::SegwitV0,
     };
-    assert!(shape::classify(&spec).is_err());
+    let shape = shape::classify(&spec).unwrap();
+    let (primary_id, primary, recoveries) = match &shape {
+        WalletShape::SegwitTimelockedPolicy {
+            primary_id,
+            primary,
+            recoveries,
+        } => (primary_id, primary, recoveries),
+        other => panic!("expected SegwitTimelockedPolicy, got {:?}", other),
+    };
+    let pair = descriptor::build(&shape).unwrap();
+    assert!(pair.external.starts_with("wsh("));
+    assert!(pair.external.contains("older(144)"));
+
+    // No taproot leaves: conditions are selected by name and timelock.
+    let policy_desc = pair.policy_descriptor.expect("policy descriptor");
+    let metadata = crate::taproot::extract(primary_id, primary, recoveries, &policy_desc).unwrap();
+    let selectors: Vec<(&str, &str)> = metadata
+        .leaves
+        .iter()
+        .map(|l| (l.spending_condition_id.as_str(), l.leaf_hash.as_str()))
+        .collect();
+    assert_eq!(
+        selectors,
+        vec![("primary", "primary"), ("recovery", "older:144")]
+    );
+    assert!(metadata.internal_key.is_none() && metadata.merkle_root.is_none());
+}
+
+#[test]
+fn segwit_v0_refuses_an_unspendable_primary() {
+    let f1 = make_key("device-1", 1);
+    let mut primary = cond("primary", true, 0, PolicyType::Single, 0, &[]);
+    primary.is_unspendable = true;
+    let spec = WalletSpec {
+        network: Network::Testnet,
+        conditions: vec![
+            primary,
+            cond("recovery", false, 144, PolicyType::Single, 1, &["device-1"]),
+        ],
+        managed_keys: keys(&[&f1]),
+        preferred_script_type: PreferredScriptType::SegwitV0,
+    };
+    let err = shape::classify(&spec).unwrap_err().to_string();
+    assert!(
+        err.contains("requires taproot"),
+        "unexpected error: {}",
+        err
+    );
+}
+
+#[test]
+fn one_of_one_multi_is_a_single_key() {
+    let f1 = make_key("device-1", 1);
+    let f2 = make_key("device-2", 2);
+    let alone = WalletSpec {
+        network: Network::Testnet,
+        conditions: vec![cond(
+            "primary",
+            true,
+            0,
+            PolicyType::Multi,
+            1,
+            &["device-1"],
+        )],
+        managed_keys: keys(&[&f1]),
+        preferred_script_type: PreferredScriptType::Auto,
+    };
+    assert!(matches!(
+        shape::classify(&alone).unwrap(),
+        WalletShape::SingleSig {
+            kind: ScriptKind::SegwitV0,
+            ..
+        }
+    ));
+
+    let with_recovery = WalletSpec {
+        network: Network::Testnet,
+        conditions: vec![
+            cond("primary", true, 0, PolicyType::Multi, 1, &["device-1"]),
+            cond("recovery", false, 144, PolicyType::Multi, 1, &["device-2"]),
+        ],
+        managed_keys: keys(&[&f1, &f2]),
+        preferred_script_type: PreferredScriptType::Auto,
+    };
+    match shape::classify(&with_recovery).unwrap() {
+        WalletShape::TimelockedPolicy {
+            primary: shape::PolicyPath::Single(_),
+            recoveries,
+            ..
+        } => assert!(matches!(recoveries[0].path, shape::PolicyPath::Single(_))),
+        other => panic!("expected single-key paths, got {:?}", other),
+    }
+}
+
+#[test]
+fn a_device_in_several_conditions_gets_a_key_per_condition() {
+    let f1 = make_key("device-1", 1);
+    let f2 = make_key("device-2", 2);
+    let spec = WalletSpec {
+        network: Network::Testnet,
+        conditions: vec![
+            cond(
+                "primary",
+                true,
+                0,
+                PolicyType::Multi,
+                2,
+                &["device-1", "device-2"],
+            ),
+            cond(
+                "either",
+                false,
+                144,
+                PolicyType::Multi,
+                1,
+                &["device-1", "device-2"],
+            ),
+            cond("alone", false, 288, PolicyType::Single, 1, &["device-1"]),
+        ],
+        managed_keys: keys(&[&f1, &f2]),
+        preferred_script_type: PreferredScriptType::Auto,
+    };
+    let shape = shape::classify(&spec).unwrap();
+    let (primary_id, primary, recoveries) = match &shape {
+        WalletShape::TimelockedPolicy {
+            primary_id,
+            primary,
+            recoveries,
+        } => (primary_id, primary, recoveries),
+        other => panic!("expected TimelockedPolicy, got {:?}", other),
+    };
+    let steps = |path: &shape::PolicyPath| -> Vec<String> {
+        path.keys()
+            .iter()
+            .map(|key| {
+                let key = key.to_string();
+                key[key.rfind("/<").unwrap()..].to_string()
+            })
+            .collect()
+    };
+    assert_eq!(steps(primary), ["/<0;1>/*", "/<0;1>/*"]);
+    assert_eq!(steps(&recoveries[0].path), ["/<2;3>/*", "/<2;3>/*"]);
+    assert_eq!(steps(&recoveries[1].path), ["/<4;5>/*"]);
+
+    // Every condition still maps to a leaf of its own, although all of
+    // them hold a key of device-1.
+    let pair = descriptor::build(&shape).unwrap();
+    let policy_desc = pair.policy_descriptor.expect("policy descriptor");
+    let leaves = crate::taproot::extract(primary_id, primary, recoveries, &policy_desc)
+        .unwrap()
+        .leaves;
+    let mut hashes: Vec<&str> = leaves.iter().map(|l| l.leaf_hash.as_str()).collect();
+    hashes.sort();
+    hashes.dedup();
+    assert_eq!(hashes.len(), 3);
+    assert!(!hashes.contains(&"keypath"));
+}
+
+#[test]
+fn key_reuse_is_refused_inside_a_condition_and_without_timelocks() {
+    let f1 = make_key("device-1", 1);
+    let f2 = make_key("device-2", 2);
+    let twice = WalletSpec {
+        network: Network::Testnet,
+        conditions: vec![
+            cond("primary", true, 0, PolicyType::Single, 1, &["device-1"]),
+            cond(
+                "recovery",
+                false,
+                144,
+                PolicyType::Multi,
+                2,
+                &["device-2", "device-2"],
+            ),
+        ],
+        managed_keys: keys(&[&f1, &f2]),
+        preferred_script_type: PreferredScriptType::Auto,
+    };
+    let err = shape::classify(&twice).unwrap_err().to_string();
+    assert!(err.contains("more than once"), "unexpected error: {}", err);
+
+    let untimelocked = WalletSpec {
+        network: Network::Testnet,
+        conditions: vec![
+            cond(
+                "primary",
+                true,
+                0,
+                PolicyType::Multi,
+                2,
+                &["device-1", "device-2"],
+            ),
+            cond("recovery", false, 0, PolicyType::Single, 1, &["device-1"]),
+        ],
+        managed_keys: keys(&[&f1, &f2]),
+        preferred_script_type: PreferredScriptType::Auto,
+    };
+    let err = shape::classify(&untimelocked).unwrap_err().to_string();
+    assert!(err.contains("timelocked"), "unexpected error: {}", err);
 }
 
 #[test]
@@ -558,7 +756,7 @@ fn single_sig_descriptors_unchanged() {
 }
 
 #[test]
-fn one_of_n_primary_with_timelocked_recovery_is_refused() {
+fn one_of_n_primary_with_timelocked_recovery_is_a_key_path_condition() {
     let f1 = make_key("device-1", 1);
     let f2 = make_key("device-2", 2);
     let f3 = make_key("device-3", 3);
@@ -579,9 +777,33 @@ fn one_of_n_primary_with_timelocked_recovery_is_refused() {
         preferred_script_type: PreferredScriptType::Auto,
     };
 
-    // The compiler spreads a 1-of-n primary over the internal key and one
-    // leaf per remaining key, so `taproot::extract` finds no leaf for the
-    // condition. Refuse the spec before a descriptor is built.
-    let err = shape::classify(&spec).unwrap_err().to_string();
-    assert!(err.contains("1-of-2 primary"), "unexpected error: {}", err);
+    let shape = shape::classify(&spec).unwrap();
+    let (primary_id, primary, recoveries) = match &shape {
+        WalletShape::TimelockedPolicy {
+            primary_id,
+            primary,
+            recoveries,
+        } => (primary_id, primary, recoveries),
+        other => panic!("expected TimelockedPolicy, got {:?}", other),
+    };
+    let pair = descriptor::build(&shape).unwrap();
+    let policy_desc = pair.policy_descriptor.expect("policy descriptor");
+
+    // The compiler makes one primary key the internal key and gives the
+    // other a leaf of its own, so the condition has no single leaf and is
+    // addressed as the key path.
+    let leaves = crate::taproot::extract(primary_id, primary, recoveries, &policy_desc)
+        .unwrap()
+        .leaves;
+    let primary_leaf = leaves
+        .iter()
+        .find(|l| l.spending_condition_id == "primary")
+        .expect("primary leaf");
+    assert_eq!(primary_leaf.leaf_hash, "keypath");
+    assert_eq!(primary_leaf.threshold, Some(1));
+    let recovery_leaf = leaves
+        .iter()
+        .find(|l| l.spending_condition_id == "recovery")
+        .expect("recovery leaf");
+    assert_ne!(recovery_leaf.leaf_hash, "keypath");
 }

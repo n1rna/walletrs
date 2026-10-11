@@ -5,10 +5,11 @@
 //! the `SignerContext` to use, and the `Wallet` (mutably). The walletrs
 //! server's existing managed-key DB lookup lives outside this crate.
 
+use std::collections::BTreeSet;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use bdk_wallet::bitcoin::bip32::{DerivationPath, Xpriv};
+use bdk_wallet::bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, Xpriv};
 use bdk_wallet::bitcoin::secp256k1::Secp256k1;
 use bdk_wallet::bitcoin::Psbt;
 use bdk_wallet::signer::{SignerContext, SignerOrdering, SignerWrapper};
@@ -70,6 +71,83 @@ pub fn add_xprv_signer(
     let signer = SignerWrapper::new(private_key, kind.into_context());
     wallet.add_signer(keychain, SignerOrdering(200), Arc::new(signer));
     Ok(())
+}
+
+/// Register a signer for every key of `device_fingerprint` that the PSBT
+/// asks for, each in the way that key signs: a taproot internal key by
+/// key path, a key inside a leaf by script path, anything else as SegWit
+/// v0. Returns how many signers were added.
+///
+/// The key's own origin decides, not the device: one device can hold the
+/// internal key and, at another multipath step of the same xpub, a key in
+/// a recovery leaf. `account_xprv` is the device's account-level key; the
+/// last two steps of each origin path are derived from it.
+pub fn add_psbt_signers(
+    wallet: &mut Wallet,
+    account_xprv: &Xpriv,
+    psbt: &Psbt,
+    device_fingerprint: &Fingerprint,
+) -> Result<usize, WalletRuntimeError> {
+    let secp = Secp256k1::new();
+    let derive = |path: &DerivationPath| {
+        let steps: Vec<ChildNumber> = path.into_iter().copied().collect();
+        if steps.len() < 2 {
+            return None;
+        }
+        account_xprv
+            .derive_priv(&secp, &&steps[steps.len() - 2..])
+            .ok()
+            .map(|derived| derived.to_priv())
+    };
+
+    let mut seen = BTreeSet::new();
+    let mut signers = Vec::new();
+    for input in &psbt.inputs {
+        for (xonly, (leaf_hashes, (fingerprint, path))) in &input.tap_key_origins {
+            if fingerprint != device_fingerprint {
+                continue;
+            }
+            let Some(private_key) = derive(path) else {
+                continue;
+            };
+            if private_key.public_key(&secp).inner.x_only_public_key().0 != *xonly {
+                continue;
+            }
+            let kind = if leaf_hashes.is_empty() {
+                SignerKind::TaprootKeyPath
+            } else {
+                SignerKind::TaprootScriptPath
+            };
+            if seen.insert((private_key.public_key(&secp).inner, leaf_hashes.is_empty())) {
+                signers.push((private_key, kind));
+            }
+        }
+        for (public_key, (fingerprint, path)) in &input.bip32_derivation {
+            if fingerprint != device_fingerprint {
+                continue;
+            }
+            let Some(private_key) = derive(path) else {
+                continue;
+            };
+            if private_key.public_key(&secp).inner != *public_key {
+                continue;
+            }
+            if seen.insert((*public_key, false)) {
+                signers.push((private_key, SignerKind::SegwitV0));
+            }
+        }
+    }
+
+    let added = signers.len();
+    for (private_key, kind) in signers {
+        let signer = SignerWrapper::new(private_key, kind.into_context());
+        wallet.add_signer(
+            KeychainKind::External,
+            SignerOrdering(200),
+            Arc::new(signer),
+        );
+    }
+    Ok(added)
 }
 
 /// Sign all inputs of a PSBT that the wallet has signers for. Returns

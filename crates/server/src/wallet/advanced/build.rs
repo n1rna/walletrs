@@ -11,7 +11,7 @@ pub struct WalletBuildResult {
     pub wallet_id: String,
     pub external_descriptor: String,
     pub internal_descriptor: String,
-    /// Canonical multipath policy descriptor for `TimelockedPolicy` wallets.
+    /// Canonical multipath policy descriptor for timelocked-policy wallets.
     /// `None` for flat single-sig / multisig / taproot-multisig wallets —
     /// those have no policy descriptor to persist, and downstream code
     /// (PSBT pruning, leaf resolution in the signer) treats `None` as
@@ -59,6 +59,11 @@ pub fn build_wallet(
                 primary_id,
                 primary,
                 recoveries,
+            }
+            | WalletShape::SegwitTimelockedPolicy {
+                primary_id,
+                primary,
+                recoveries,
             },
             Some(desc),
         ) => taproot::extract(primary_id, primary, recoveries, desc)?,
@@ -81,6 +86,7 @@ fn shape_label(shape: &WalletShape) -> &'static str {
         WalletShape::SingleSig { .. } => "SingleSig",
         WalletShape::Multisig { .. } => "Multisig",
         WalletShape::TimelockedPolicy { .. } => "TimelockedPolicy",
+        WalletShape::SegwitTimelockedPolicy { .. } => "SegwitTimelockedPolicy",
     }
 }
 
@@ -334,8 +340,8 @@ mod tests {
 
     #[test]
     fn build_wallet_propagates_classify_failure() {
-        // SegwitV0 preferred + recovery condition is rejected by classify
-        // (TimelockedPolicy requires Taproot).
+        // A condition naming the same device twice passes spec validation
+        // and is rejected by classify.
         let (id1, k1) = make_key(601);
         let (id2, k2) = make_key(602);
         let mut keys = BTreeMap::new();
@@ -357,17 +363,17 @@ mod tests {
                     id: "recovery".into(),
                     is_primary: false,
                     timelock: 144,
-                    threshold: 1,
-                    policy: PolicyType::Single,
-                    managed_key_ids: vec![id2],
+                    threshold: 2,
+                    policy: PolicyType::Multi,
+                    managed_key_ids: vec![id2.clone(), id2],
                     is_unspendable: false,
                 },
             ],
             managed_keys: keys,
-            preferred_script_type: PreferredScriptType::SegwitV0,
+            preferred_script_type: PreferredScriptType::Auto,
         };
         let err = build_wallet(&bad_spec, &stored(&unique_wallet_id("bad-classify")))
-            .expect_err("SegwitV0 + recovery should be rejected at classify");
+            .expect_err("a device listed twice in one condition should be rejected at classify");
         assert!(matches!(err, WalletCreationError::Policy(_)));
     }
 

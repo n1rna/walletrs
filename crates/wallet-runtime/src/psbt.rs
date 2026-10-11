@@ -121,7 +121,9 @@ fn derivation_from_path(
     } else {
         ChildNumber::from_normal_idx(0).ok()?
     };
-    let keychain = if u32::from(chain_number) == 0 {
+    // Receive chains are the even multipath steps (`<0;1>`, `<2;3>`, …),
+    // change chains the odd ones.
+    let keychain = if u32::from(chain_number) % 2 == 0 {
         KeychainKind::External
     } else {
         KeychainKind::Internal

@@ -41,5 +41,5 @@ pub use psbt::{analyze_for_signing, PsbtSignerAnalysis};
 pub use runtime::{
     create_wallet, load_wallet, peek_address, reveal_next_address, WalletDescriptors,
 };
-pub use signer::{add_xprv_signer, sign_psbt, SignerKind};
+pub use signer::{add_psbt_signers, add_xprv_signer, sign_psbt, SignerKind};
 pub use spending_path::{list_spending_paths, SpendingPath};

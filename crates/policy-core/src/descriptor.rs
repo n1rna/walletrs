@@ -8,7 +8,7 @@ use crate::shape::{PolicyPath, RecoveryPath, ScriptKind, WalletShape};
 
 /// Output of descriptor construction. `external` is the receive descriptor,
 /// `internal` is the change descriptor. `policy_descriptor` is populated
-/// only for the `TimelockedPolicy` shape so callers can persist the
+/// only for the timelocked-policy shapes so callers can persist the
 /// canonical multipath descriptor for later PSBT pruning and leaf-hash
 /// resolution.
 #[derive(Debug, Clone)]
@@ -47,7 +47,12 @@ pub fn build(shape: &WalletShape) -> Result<DescriptorPair, PolicyError> {
             primary,
             recoveries,
             ..
-        } => timelocked_policy(primary, recoveries),
+        } => timelocked_policy(primary, recoveries, ScriptKind::Taproot),
+        WalletShape::SegwitTimelockedPolicy {
+            primary,
+            recoveries,
+            ..
+        } => timelocked_policy(primary, recoveries, ScriptKind::SegwitV0),
     }
 }
 
@@ -84,6 +89,7 @@ fn multisig_taproot(
 fn timelocked_policy(
     primary: &PolicyPath,
     recoveries: &[RecoveryPath],
+    kind: ScriptKind,
 ) -> Result<DescriptorPair, PolicyError> {
     let primary_path = path_info(primary);
     let recovery_paths: BTreeMap<u16, PathInfo> = recoveries
@@ -91,8 +97,11 @@ fn timelocked_policy(
         .map(|r| (r.timelock, path_info(&r.path)))
         .collect();
 
-    let policy = LianaPolicy::new(primary_path, recovery_paths)
-        .map_err(|e| PolicyError::PolicyIntegration(e.to_string()))?;
+    let policy = match kind {
+        ScriptKind::Taproot => LianaPolicy::new(primary_path, recovery_paths),
+        ScriptKind::SegwitV0 => LianaPolicy::new_legacy(primary_path, recovery_paths),
+    }
+    .map_err(|e| PolicyError::PolicyIntegration(e.to_string()))?;
     let descriptor = LianaDescriptor::new(policy);
 
     Ok(DescriptorPair {

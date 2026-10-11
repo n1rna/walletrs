@@ -3,7 +3,8 @@
 //!
 //! Each row of `cases()` is built from a `WalletSpec`, funded, and then
 //! spent once per spending condition with exactly that condition's
-//! threshold of keys: resolve the leaf, build the PSBT, sign, finalize,
+//! threshold of keys (once per key when any one key is enough): resolve
+//! the leaf, build the PSBT, sign, finalize,
 //! and check that the transaction commits to the right timelock and
 //! reveals the right script. A shape that only works for some of its
 //! paths fails here instead of after funds are deposited.
@@ -11,7 +12,7 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use bdk_wallet::bitcoin::bip32::{DerivationPath, Xpriv, Xpub};
+use bdk_wallet::bitcoin::bip32::{DerivationPath, Fingerprint, Xpriv, Xpub};
 use bdk_wallet::bitcoin::secp256k1::Secp256k1;
 use bdk_wallet::bitcoin::taproot::{LeafVersion, TapLeafHash};
 use bdk_wallet::bitcoin::{Address, Amount, FeeRate, Network, Psbt, Script, Sequence};
@@ -24,8 +25,7 @@ use policy_core::{
     SpendingCondition, TaprootLeafInfo, WalletShape, WalletSpec,
 };
 use wallet_runtime::{
-    add_xprv_signer, list_spending_paths, resolve_policy_path, sign_psbt, PolicyDescriptor,
-    SignerKind,
+    add_psbt_signers, list_spending_paths, resolve_policy_path, sign_psbt, PolicyDescriptor,
 };
 
 const ACCOUNT_PATH: &str = "m/84'/1'/0'";
@@ -64,6 +64,18 @@ struct Case {
     /// `None` is an unspendable primary.
     primary: Option<Cond>,
     recoveries: Vec<Cond>,
+}
+
+impl Case {
+    /// Whether some device holds a key in more than one condition.
+    fn reuses_keys(&self) -> bool {
+        let mut seen = std::collections::BTreeSet::new();
+        self.primary
+            .iter()
+            .chain(self.recoveries.iter())
+            .flat_map(|cond| cond.keys.iter())
+            .any(|seed| !seen.insert(*seed))
+    }
 }
 
 fn cases() -> Vec<Case> {
@@ -168,6 +180,34 @@ fn cases() -> Vec<Case> {
             vec![multi("recovery", 10, 1, &[2, 3, 4])],
         ),
         case(
+            "1-of-2 primary + single recovery",
+            Auto,
+            Some(multi("primary", 0, 1, &[1, 2])),
+            vec![single("recovery", 10, 3)],
+        ),
+        case(
+            "1-of-3 primary + multisig recovery",
+            Auto,
+            Some(multi("primary", 0, 1, &[1, 2, 3])),
+            vec![multi("recovery", 10, 2, &[4, 5])],
+        ),
+        case(
+            "1-of-3 primary + three recoveries",
+            Auto,
+            Some(multi("primary", 0, 1, &[1, 2, 3])),
+            vec![
+                single("a", 10, 4),
+                multi("b", 20, 2, &[5, 6]),
+                multi("c", 30, 1, &[7, 8]),
+            ],
+        ),
+        case(
+            "1-of-5 primary + single recovery",
+            Auto,
+            Some(multi("primary", 0, 1, &[1, 2, 3, 4, 5])),
+            vec![single("recovery", 10, 6)],
+        ),
+        case(
             "3-of-3 primary + 2-of-2 recovery",
             Auto,
             Some(multi("primary", 0, 3, &[1, 2, 3])),
@@ -187,6 +227,76 @@ fn cases() -> Vec<Case> {
                 single("a", 10, 1),
                 multi("b", 20, 2, &[2, 3, 4]),
                 single("c", 30, 5),
+            ],
+        ),
+        case(
+            "decaying multisig: 3-of-3, then 2-of-3, then 1-of-3 of the same keys",
+            Auto,
+            Some(multi("primary", 0, 3, &[1, 2, 3])),
+            vec![
+                multi("two", 10, 2, &[1, 2, 3]),
+                multi("one", 20, 1, &[1, 2, 3]),
+            ],
+        ),
+        case(
+            "single primary, reused with a cosigner in the recovery",
+            Auto,
+            Some(single("primary", 0, 1)),
+            vec![multi("recovery", 10, 2, &[1, 2])],
+        ),
+        case(
+            "1-of-2 primary, both keys reused in a 2-of-2 recovery",
+            Auto,
+            Some(multi("primary", 0, 1, &[1, 2])),
+            vec![multi("recovery", 10, 2, &[1, 2])],
+        ),
+        case(
+            "unspendable primary, key reused across recoveries",
+            Auto,
+            None,
+            vec![multi("both", 10, 2, &[1, 2]), single("alone", 20, 1)],
+        ),
+        case(
+            "segwit: single primary + single recovery",
+            SegwitV0,
+            Some(single("primary", 0, 1)),
+            vec![single("recovery", 10, 2)],
+        ),
+        case(
+            "segwit: single primary + multisig recovery",
+            SegwitV0,
+            Some(single("primary", 0, 1)),
+            vec![multi("recovery", 10, 2, &[2, 3, 4])],
+        ),
+        case(
+            "segwit: multisig primary + multisig recovery",
+            SegwitV0,
+            Some(multi("primary", 0, 2, &[1, 2, 3])),
+            vec![multi("recovery", 10, 2, &[4, 5, 6])],
+        ),
+        case(
+            "segwit: multisig primary + three recoveries",
+            SegwitV0,
+            Some(multi("primary", 0, 2, &[1, 2])),
+            vec![
+                single("a", 10, 3),
+                multi("b", 20, 2, &[4, 5, 6]),
+                multi("c", 30, 1, &[7, 8]),
+            ],
+        ),
+        case(
+            "segwit: 1-of-2 primary + single recovery",
+            SegwitV0,
+            Some(multi("primary", 0, 1, &[1, 2])),
+            vec![single("recovery", 10, 3)],
+        ),
+        case(
+            "segwit: decaying multisig",
+            SegwitV0,
+            Some(multi("primary", 0, 3, &[1, 2, 3])),
+            vec![
+                multi("two", 10, 2, &[1, 2, 3]),
+                multi("one", 20, 1, &[1, 2, 3]),
             ],
         ),
         case(
@@ -248,7 +358,6 @@ fn fingerprints(cond: &Cond) -> Vec<String> {
 
 struct Built {
     wallet: Wallet,
-    external: String,
     /// Stored policy descriptor and leaf metadata; `None` for flat shapes.
     policy: Option<(String, Vec<TaprootLeafInfo>)>,
 }
@@ -316,6 +425,11 @@ fn build(case: &Case) -> Built {
                 primary_id,
                 primary,
                 recoveries,
+            }
+            | WalletShape::SegwitTimelockedPolicy {
+                primary_id,
+                primary,
+                recoveries,
             },
             Some(desc),
         ) => {
@@ -333,7 +447,7 @@ fn build(case: &Case) -> Built {
         case.name
     );
 
-    let mut wallet = Wallet::create(pair.external.clone(), pair.internal)
+    let mut wallet = Wallet::create(pair.external, pair.internal)
         .network(Network::Regtest)
         .create_wallet_no_persist()
         .expect("BDK wallet");
@@ -341,11 +455,7 @@ fn build(case: &Case) -> Built {
     receive_output_in_latest_block(&mut wallet, 100_000);
     insert_checkpoint(&mut wallet, block(200));
 
-    Built {
-        wallet,
-        external: pair.external,
-        policy,
-    }
+    Built { wallet, policy }
 }
 
 fn block(height: u32) -> BlockId {
@@ -372,18 +482,32 @@ fn spend(wallet: &mut Wallet, policy_path: Option<BTreeMap<String, Vec<usize>>>)
     builder.finish().expect("spend builds")
 }
 
-/// Sign with the last `threshold` keys of the condition, so a
+/// Signer sets to try for a condition: every key on its own when one
+/// signature is enough, otherwise the last `threshold` keys, so a
 /// multisig never passes by using more signers than it requires.
-fn sign(wallet: &mut Wallet, psbt: &mut Psbt, cond: &Cond, kind: SignerKind) {
-    for seed in cond.keys.iter().rev().take(cond.threshold) {
-        add_xprv_signer(
-            wallet,
-            &key(*seed).account_xprv,
-            KeychainKind::External,
-            0,
-            kind,
-        )
-        .expect("add signer");
+fn signer_sets(cond: &Cond) -> Vec<Vec<u8>> {
+    if cond.threshold == 1 {
+        cond.keys.iter().map(|seed| vec![*seed]).collect()
+    } else {
+        vec![cond
+            .keys
+            .iter()
+            .rev()
+            .take(cond.threshold)
+            .copied()
+            .collect()]
+    }
+}
+
+/// Sign the way the server does: register every key the PSBT asks each
+/// device for, each in the way that key signs.
+fn sign(wallet: &mut Wallet, psbt: &mut Psbt, signers: &[u8]) {
+    for seed in signers {
+        let signer = key(*seed);
+        let fingerprint = Fingerprint::from_str(&signer.managed.fingerprint).unwrap();
+        let added = add_psbt_signers(wallet, &signer.account_xprv, psbt, &fingerprint)
+            .expect("add signers");
+        assert!(added > 0, "PSBT asks nothing of device {}", seed);
     }
     sign_psbt(wallet, psbt).expect("sign");
 }
@@ -402,26 +526,17 @@ fn revealed_leaf(psbt: &Psbt) -> Option<String> {
     Some(TapLeafHash::from_script(script, LeafVersion::TapScript).to_string())
 }
 
-fn spend_flat(case: &Case) {
-    let primary = case.primary.as_ref().expect("flat shapes have a primary");
+fn spend_flat(case: &Case, signers: &[u8]) {
     let mut built = build(case);
-    let kind = if !built.external.starts_with("tr(") {
-        SignerKind::SegwitV0
-    } else if primary.keys.len() == 1 {
-        SignerKind::TaprootKeyPath
-    } else {
-        SignerKind::TaprootScriptPath
-    };
-
     let mut psbt = spend(&mut built.wallet, None);
-    sign(&mut built.wallet, &mut psbt, primary, kind);
+    sign(&mut built.wallet, &mut psbt, signers);
     psbt.finalize_mut(&Secp256k1::new())
         .unwrap_or_else(|e| panic!("{}: does not finalize: {:?}", case.name, e));
     psbt.extract_tx().expect("extracts");
 }
 
-fn spend_policy_path(case: &Case, cond: &Cond) {
-    let name = format!("{} / {}", case.name, cond.id);
+fn spend_policy_path(case: &Case, cond: &Cond, signers: &[u8]) {
+    let name = format!("{} / {} signed by {:?}", case.name, cond.id, signers);
     let mut built = build(case);
     let (stored, leaves) = built.policy.clone().expect("timelocked policy");
     let leaf = leaves
@@ -452,32 +567,67 @@ fn spend_policy_path(case: &Case, cond: &Cond) {
         );
     }
 
+    sign(&mut built.wallet, &mut psbt, signers);
+    let taproot = stored.starts_with("tr(");
     let keypath = leaf.leaf_hash == "keypath";
-    let kind = if keypath {
-        SignerKind::TaprootKeyPath
+    let input = &psbt.inputs[0];
+    let signatures = if !taproot {
+        input.partial_sigs.len()
+    } else if keypath {
+        // The internal key signs the key path; any other key of a 1-of-n
+        // primary signs a leaf of its own.
+        usize::from(input.tap_key_sig.is_some())
+            + input
+                .tap_script_sigs
+                .keys()
+                .filter(|(_, hash)| leaves.iter().all(|l| l.leaf_hash != hash.to_string()))
+                .count()
     } else {
-        SignerKind::TaprootScriptPath
+        input
+            .tap_script_sigs
+            .keys()
+            .filter(|(_, hash)| hash.to_string() == leaf.leaf_hash)
+            .count()
     };
-    sign(&mut built.wallet, &mut psbt, cond, kind);
-    if keypath {
-        assert!(psbt.inputs[0].tap_key_sig.is_some(), "{}: key sig", name);
-    } else {
-        assert_eq!(
-            psbt.inputs[0].tap_script_sigs.len(),
-            cond.threshold,
-            "{}: one script signature per signer",
-            name
-        );
-    }
+    assert!(
+        signatures >= cond.threshold,
+        "{}: {} signature(s) for this path, needs {}",
+        name,
+        signatures,
+        cond.threshold
+    );
 
     psbt.finalize_mut(&Secp256k1::new())
         .unwrap_or_else(|e| panic!("{}: does not finalize: {:?}", name, e));
-    assert_eq!(
-        revealed_leaf(&psbt),
-        (!keypath).then(|| leaf.leaf_hash.clone()),
-        "{}: spend must go through this path's own leaf",
-        name
-    );
+
+    // With every key in one condition only, the signers can satisfy just
+    // this path, so the spend must reveal exactly its script. A device
+    // holding keys in several conditions signs for all of them, and the
+    // finalizer may pick another path those signatures also satisfy.
+    if taproot && !case.reuses_keys() {
+        let revealed = revealed_leaf(&psbt);
+        if keypath {
+            assert!(
+                revealed
+                    .as_ref()
+                    .is_none_or(|hash| leaves.iter().all(|l| &l.leaf_hash != hash)),
+                "{}: primary spend went through another path's leaf",
+                name
+            );
+            assert!(
+                revealed.is_none() || cond.keys.len() > 1,
+                "{}: a single-key primary must spend by key path",
+                name
+            );
+        } else {
+            assert_eq!(
+                revealed.as_ref(),
+                Some(&leaf.leaf_hash),
+                "{}: spend must go through this path's own leaf",
+                name
+            );
+        }
+    }
     psbt.extract_tx().expect("extracts");
 }
 
@@ -535,14 +685,23 @@ fn every_shape_spends_through_every_path() {
     for case in cases() {
         let mut runs: Vec<(String, Box<dyn Fn() + '_>)> = Vec::new();
         if case.recoveries.is_empty() {
-            runs.push((case.name.to_string(), Box::new(|| spend_flat(&case))));
-        } else {
-            for cond in case.primary.iter().chain(case.recoveries.iter()) {
+            let primary = case.primary.as_ref().expect("flat shapes have a primary");
+            for signers in signer_sets(primary) {
                 let case = &case;
                 runs.push((
-                    format!("{} / {}", case.name, cond.id),
-                    Box::new(move || spend_policy_path(case, cond)),
+                    format!("{} signed by {:?}", case.name, signers),
+                    Box::new(move || spend_flat(case, &signers)),
                 ));
+            }
+        } else {
+            for cond in case.primary.iter().chain(case.recoveries.iter()) {
+                for signers in signer_sets(cond) {
+                    let case = &case;
+                    runs.push((
+                        format!("{} / {} signed by {:?}", case.name, cond.id, signers),
+                        Box::new(move || spend_policy_path(case, cond, &signers)),
+                    ));
+                }
             }
             runs.push((
                 format!("{} / listed paths", case.name),
@@ -575,16 +734,16 @@ fn unsupported_shapes_are_refused_at_creation() {
     use PreferredScriptType::{Auto, SegwitV0};
     let refused = [
         Case {
-            name: "1-of-2 primary + recovery",
-            script: Auto,
-            primary: Some(multi("primary", 0, 1, &[1, 2])),
-            recoveries: vec![single("recovery", 10, 3)],
-        },
-        Case {
-            name: "same key in primary and recovery",
+            name: "same key twice in one condition",
             script: Auto,
             primary: Some(single("primary", 0, 1)),
-            recoveries: vec![multi("recovery", 10, 2, &[1, 2])],
+            recoveries: vec![multi("recovery", 10, 2, &[2, 2])],
+        },
+        Case {
+            name: "key reused across conditions with no timelock",
+            script: Auto,
+            primary: Some(multi("primary", 0, 2, &[1, 2])),
+            recoveries: vec![multi("recovery", 0, 1, &[1, 3])],
         },
         Case {
             name: "two recoveries with the same timelock",
@@ -593,10 +752,10 @@ fn unsupported_shapes_are_refused_at_creation() {
             recoveries: vec![single("a", 10, 2), single("b", 10, 3)],
         },
         Case {
-            name: "segwit with a recovery",
+            name: "unspendable primary on segwit",
             script: SegwitV0,
-            primary: Some(single("primary", 0, 1)),
-            recoveries: vec![single("recovery", 10, 2)],
+            primary: None,
+            recoveries: vec![single("recovery", 10, 1)],
         },
     ];
     for case in &refused {

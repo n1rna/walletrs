@@ -333,18 +333,34 @@ client
 
 After the threshold of signatures is collected, call `finalize_wallet_transaction` and `broadcast_wallet_transaction` as above.
 
-## Taproot leaf-hash spends
+## Choosing a spending path
 
-Wallets created with multiple time-locked recovery paths return a `TaprootLeafInfo[]` in the `CreateGenericWallet` response. Each entry has a `leaf_hash` (or the sentinel `"keypath"`) and a `spending_condition_id` matching one of your input conditions. To spend via a specific path:
+Wallets with time-locked recovery paths return a `TaprootLeafInfo[]` in the `CreateGenericWallet` response: one entry per spending condition, carrying its `spending_condition_id` and a `leaf_hash`. Treat `leaf_hash` as an opaque selector and pass it back to spend through that condition:
 
 ```rust
 fund_wallet_transaction(FundWalletTransactionRequest {
-    selected_leaf_hash: "abcdef...".into(),  // the leaf_hash for the recovery you want
+    selected_leaf_hash: "abcdef...".into(),  // the leaf_hash of the condition you want
     ...
 });
 ```
 
-The signer maps that leaf hash back to a BDK policy-path index (`vec![0]` for primary / keypath, `vec![idx + 1]` for the Nth recovery). For the primary keypath spend, pass `selected_leaf_hash: "keypath"`.
+What the selector looks like depends on the wallet:
+
+| Wallet | Condition | `leaf_hash` |
+|---|---|---|
+| Taproot | single-key or 1-of-n primary | `keypath` |
+| Taproot | multisig primary, any recovery | hex taproot leaf hash |
+| SegWit v0 | primary | `primary` (an empty selector also works) |
+| SegWit v0 | recovery | `older:<blocks>` |
+
+The server maps the selector to a BDK policy path. Taproot leaves are located by their position in the taptree, which the policy compiler picks and which is not timelock order.
+
+### Policy shapes
+
+- **Script type.** Timelocked policies are taproot by default. Ask for `SCRIPT_TYPE_SEGWIT_V0` to get the same policy as P2WSH, for signers that cannot spend taproot script paths. An unspendable primary needs taproot.
+- **One signer in several conditions.** A managed key may appear in more than one condition, which is how a decaying multisig is built (3-of-3 now, 2-of-3 of the same signers later). Each further use takes the next multipath step of the key's xpub (`<2;3>`, `<4;5>`, …), so a signer holds a distinct key per condition and must sign with the one the PSBT names. A key may not appear twice in one condition, and reuse needs timelocked recoveries.
+- **1-of-n primary.** Any one key spends alone. The first key becomes the taproot internal key and signs by key path; each other key signs a leaf of its own.
+- **Not supported.** Two recoveries with the same timelock: recoveries are keyed by timelock, so give them different ones (a block apart is enough).
 
 ## Common errors
 

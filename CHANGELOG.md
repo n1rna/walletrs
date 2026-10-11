@@ -4,6 +4,23 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [Unreleased]
 
+### Added
+
+- **One signer can take part in several conditions.** A managed key may now appear in more than one spending condition of a timelocked policy, which is what a decaying multisig needs (3-of-3 now, 2-of-3 of the same signers after a timelock). It was refused as a duplicate key. Each further use of a key takes the next multipath step of its xpub (`<2;3>`, `<4;5>`, …), so every condition holds a distinct key. A key still may not appear twice in one condition, and reuse needs timelocked recoveries.
+- **Timelocked policies on SegWit v0.** `SCRIPT_TYPE_SEGWIT_V0` with recovery conditions now builds the policy as P2WSH instead of failing with `SegWit v0 is not supported for policy-based wallets with timelocks`. There are no taproot leaves, so `TaprootLeafInfo.leaf_hash` carries the selectors `primary` and `older:<blocks>`, and `FundWalletTransaction` treats an empty selector as the primary. An unspendable primary still needs taproot.
+- **A 1-of-n primary can be combined with timelocked recovery paths.** 0.6.3 refused this shape; before that it failed at creation. The policy compiler makes the first primary key the taproot internal key and gives each remaining key a leaf of its own, so the condition has no single leaf. It is reported with the `keypath` leaf hash, like a single-key primary. Any one primary key can spend alone: the internal key signs the key path and every other key signs its own leaf.
+- **A 1-of-1 `Multi` condition is accepted** and treated as the single key it is. Alone it used to fail with `A Liana policy requires at least one recovery path`.
+- **`wallet_runtime::add_psbt_signers`** registers one signer per key a PSBT names for a device, each in the way that key signs.
+
+### Changed
+
+- **System keys sign per key, not per device.** `SignWalletTransaction` decided once per device whether it signs by taproot key path, script path or SegWit v0, and derived its keys from the first multipath step only. A device that holds the internal key and a key in a recovery leaf needs both. Signers now come from the key origins in the PSBT; the old per-device guess remains as the fallback when the PSBT names no key of the device.
+- **Leaf metadata matches conditions by their exact keys** and timelock instead of by signer fingerprint, which stops being unique once a signer is in several conditions.
+
+### Fixed
+
+- **`analyze_for_signing` reads `<2;3>` and later receive chains as external.** Every non-zero chain was reported as the change keychain.
+
 ## [0.6.3] - 2026-10-11
 
 ### Fixed

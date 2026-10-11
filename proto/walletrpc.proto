@@ -189,7 +189,10 @@ message FundWalletTransactionRequest {
 	uint64 destination_value = 3;
 	string change_address = 4;
 	uint64 fee_per_kb = 5;
-	string selected_leaf_hash = 6; // Hex-encoded taproot leaf hash for spending path selection
+	// Spending path selector: the `leaf_hash` that CreateGenericWallet
+	// returned for the spending condition to spend through. Empty for
+	// wallets without a policy, and for the primary of a SegWit v0 policy.
+	string selected_leaf_hash = 6;
 	bool spend_change = 7;
 }
 
@@ -349,7 +352,10 @@ message SpendingCondition {
 	uint32 timelock = 3; // Timelock in blocks
 	uint32 threshold = 4; // Threshold for multi-sig
 	PolicyType policy = 5; // Single or Multi
-	repeated string managed_key_ids = 6; // List of managed key IDs
+	// List of managed key IDs. A key may appear in several conditions of a
+	// timelocked policy, never twice in one: each further use takes the
+	// next multipath step of its xpub (<2;3>, <4;5>, ...).
+	repeated string managed_key_ids = 6;
 	// When true, the primary path is replaced with a deterministic
 	// NUMS-derived xpub, making it provably unspendable. Only valid on
 	// a primary condition that has a non-primary recovery condition
@@ -380,7 +386,11 @@ message CreateGenericWalletResponse {
 
 // Taproot spending path information
 message TaprootLeafInfo {
-	string leaf_hash = 1; // Hex-encoded taproot leaf hash
+	// Selector to pass back as `selected_leaf_hash`. Taproot: the
+	// hex-encoded leaf hash, or "keypath" when the condition spends via
+	// the internal key (a single-key or 1-of-n primary). SegWit v0
+	// policies have no leaves: "primary" or "older:<blocks>".
+	string leaf_hash = 1;
 	string spending_condition_id = 2; // Unique identifier for this spending condition
 	repeated string script_path = 3; // Hex-encoded merkle path to this leaf
 	uint32 timelock = 4; // CSV timelock in blocks (if applicable)
