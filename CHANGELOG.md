@@ -4,6 +4,8 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-11
+
 ### Added
 
 - **One signer can take part in several conditions.** A managed key may now appear in more than one spending condition of a timelocked policy, which is what a decaying multisig needs (3-of-3 now, 2-of-3 of the same signers after a timelock). It was refused as a duplicate key. Each further use of a key takes the next multipath step of its xpub (`<2;3>`, `<4;5>`, …), so every condition holds a distinct key. A key still may not appear twice in one condition, and reuse needs timelocked recoveries.
@@ -119,6 +121,7 @@ All notable changes to this project will be documented here. The format follows 
 - Repository extracted from the `sigvault` monorepo. Cargo workspace at the root with `crates/server` (the gRPC binary + library) and `contrib/liana`. The proto contract lives at `proto/walletrpc.proto` as the single source of truth.
 - License: BSD-3-Clause (single `LICENSE` file).
 
+[0.7.0]: https://github.com/n1rna/walletrs/compare/v0.6.3...v0.7.0
 [0.6.3]: https://github.com/n1rna/walletrs/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/n1rna/walletrs/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/n1rna/walletrs/compare/v0.6.0...v0.6.1
