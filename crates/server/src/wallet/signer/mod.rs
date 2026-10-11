@@ -16,7 +16,7 @@ use bdk_wallet::{KeychainKind, Wallet};
 use log::{debug, info, warn};
 use tonic::Status;
 use wallet_runtime::{
-    add_xprv_signer, analyze_for_signing, resolve_policy_path as wr_resolve_path,
+    add_psbt_signers, add_xprv_signer, analyze_for_signing, resolve_policy_path as wr_resolve_path,
     sign_psbt as wr_sign_psbt, PolicyDescriptor, PsbtSignerAnalysis, SignerKind,
 };
 
@@ -77,6 +77,37 @@ pub fn add_signers_for_psbt(
     }
 
     let device_fp = parse_stored_fingerprint(&key.fingerprint, &key.device_id)?;
+
+    let tpriv_str = key.tpriv.as_ref().ok_or_else(|| {
+        Status::internal(format!(
+            "Device {} has no tpriv (account-level xpriv) stored",
+            key.device_id
+        ))
+    })?;
+
+    let account_xpriv = Xpriv::from_str(tpriv_str).map_err(|e| {
+        Status::internal(format!(
+            "Failed to parse account xpriv for device {}: {}",
+            key.device_id, e
+        ))
+    })?;
+
+    // One signer per key the PSBT names for this device, each registered
+    // the way that key signs. A device can hold several keys in a wallet
+    // (a key per condition it takes part in), so the choice between key
+    // path, script path and SegWit v0 belongs to the key, not the device.
+    let named = add_psbt_signers(wallet, &account_xpriv, psbt, &device_fp)
+        .map_err(|e| Status::internal(format!("Failed to add signers: {}", e)))?;
+    if named > 0 {
+        info!(
+            "✅ Added {} signers for device {} (fp: {}) from the PSBT's key origins",
+            named, device_id, key.fingerprint
+        );
+        return Ok(named as i32);
+    }
+
+    // The PSBT names no key of this device: fall back to guessing from
+    // the wallet's own derivations.
     let mut analysis: PsbtSignerAnalysis = analyze_for_signing(wallet, psbt, &device_fp);
 
     if analysis.has_taproot_inputs && !analysis.device_in_tap_origins {
@@ -110,20 +141,6 @@ pub fn add_signers_for_psbt(
             }
         }
     }
-
-    let tpriv_str = key.tpriv.as_ref().ok_or_else(|| {
-        Status::internal(format!(
-            "Device {} has no tpriv (account-level xpriv) stored",
-            key.device_id
-        ))
-    })?;
-
-    let account_xpriv = Xpriv::from_str(tpriv_str).map_err(|e| {
-        Status::internal(format!(
-            "Failed to parse account xpriv for device {}: {}",
-            key.device_id, e
-        ))
-    })?;
 
     let mut added = 0i32;
     for (keychain, index) in &analysis.required_derivations {

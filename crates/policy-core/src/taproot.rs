@@ -1,31 +1,33 @@
-//! Taproot leaf-hash extraction for timelocked-policy wallets.
+//! Spending-path metadata for timelocked-policy wallets.
 //!
 //! Takes a built `LianaDescriptor` plus the structured shape inputs and
-//! returns the leaf-hash, internal-key and merkle-root metadata that clients
-//! need in order to drive script-path spends. The flow is:
+//! returns, for every spending condition, the selector a client passes
+//! back to spend through it.
 //!
-//! 1. Derive the descriptor at index 0 to get a definite-key descriptor.
-//! 2. Populate a default `PsbtInput` via Liana's `update_psbt_in` — Liana
-//!    fills in `tap_internal_key`, `tap_merkle_root` and a `tap_key_origins`
-//!    map of `(xonly_pk -> (leaf_hashes, (fingerprint, deriv)))`.
-//! 3. Walk the recovery paths in the BTreeMap iteration order (ascending
-//!    timelock; matches BDK policy child indices `1..=N`) and find the leaf
-//!    hash whose fingerprints intersect each path's signers.
-//! 4. Add a `"keypath"` sentinel for the primary path when it spends via the
-//!    taproot internal key, and a real leaf hash when the primary lives in
-//!    the script tree (multisig primary).
+//! Taproot: the selector is the hex `TapLeafHash` of the condition's leaf,
+//! found by matching the leaf's exact keys and timelock, since one signer
+//! may hold a key in several conditions. Two cases have no leaf of their
+//! own and use the `"keypath"` sentinel instead: a single-key primary,
+//! which is the internal key, and a 1-of-n primary, where the compiler
+//! makes one key the internal key and gives each of the others its own
+//! leaf.
+//!
+//! SegWit v0: there are no leaves. The selectors are `"primary"` and
+//! `"older:<blocks>"`, which the resolver maps onto the script's branches.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::BTreeSet;
 
-use bdk_wallet::bitcoin::bip32::{ChildNumber, Fingerprint};
+use bdk_wallet::bitcoin::bip32::ChildNumber;
 use bdk_wallet::bitcoin::hashes::Hash;
 use bdk_wallet::bitcoin::psbt::Input as PsbtInput;
 use bdk_wallet::bitcoin::secp256k1::Secp256k1;
 use liana::descriptors::LianaDescriptor;
+use miniscript::descriptor::DescriptorPublicKey;
 
 use crate::error::PolicyError;
 use crate::shape::{PolicyPath, RecoveryPath};
 use crate::spec::PolicyType;
+use crate::taptree::{TapLeaf, TapTree};
 
 #[derive(Debug, Clone)]
 pub struct TaprootLeafInfo {
@@ -51,12 +53,11 @@ pub fn extract(
     recoveries: &[RecoveryPath],
     descriptor: &LianaDescriptor,
 ) -> Result<TaprootMetadata, PolicyError> {
-    if !descriptor.is_taproot() {
-        return Ok(TaprootMetadata::default());
-    }
+    let Some(tree) = TapTree::parse(&descriptor.to_string())? else {
+        return Ok(segwit_metadata(primary_id, primary, recoveries));
+    };
 
     let psbt_input = populate_dummy_psbt_input(descriptor)?;
-
     let internal_key = psbt_input
         .tap_internal_key
         .map(|k| hex::encode(k.serialize()));
@@ -64,40 +65,36 @@ pub fn extract(
         .tap_merkle_root
         .map(|r| hex::encode(r.to_byte_array()));
 
-    let fp_to_leaves = collect_leaves_by_fingerprint(&psbt_input);
-    let primary_in_taptree = matches!(primary, PolicyPath::Multi { .. });
-
     let mut leaves = Vec::new();
 
-    if !primary_in_taptree {
+    let primary_leaf_hash = match primary {
+        PolicyPath::Single(_) => None,
+        PolicyPath::Multi { .. } => match leaf_for(&tree, primary, None) {
+            Some(leaf) => Some(leaf.leaf_hash.clone()),
+            None if spread_over_key_path(&tree, primary) => None,
+            None => {
+                return Err(PolicyError::DescriptorGeneration(format!(
+                    "Failed to extract taproot leaf hash for primary condition `{}`",
+                    primary_id
+                )))
+            }
+        },
+    };
+    if primary_leaf_hash.is_none() {
         leaves.push(primary_keypath_leaf(primary, primary_id));
     }
 
     for recovery in recoveries.iter() {
-        let leaf_hash = leaf_hash_for_path(&recovery.path, &fp_to_leaves).ok_or_else(|| {
+        let leaf = leaf_for(&tree, &recovery.path, Some(recovery.timelock)).ok_or_else(|| {
             PolicyError::DescriptorGeneration(format!(
                 "Failed to extract taproot leaf hash for recovery condition `{}`",
                 recovery.id
             ))
         })?;
-        leaves.push(TaprootLeafInfo {
-            leaf_hash,
-            spending_condition_id: recovery.id.clone(),
-            script_path: Vec::new(),
-            timelock: Some(recovery.timelock),
-            policy_type: policy_path_kind(&recovery.path),
-            threshold: policy_path_threshold(&recovery.path),
-            description: format_description("Recovery", &recovery.path, Some(recovery.timelock)),
-        });
+        leaves.push(recovery_leaf(recovery, leaf.leaf_hash.clone()));
     }
 
-    if primary_in_taptree {
-        let leaf_hash = leaf_hash_for_path(primary, &fp_to_leaves).ok_or_else(|| {
-            PolicyError::DescriptorGeneration(format!(
-                "Failed to extract taproot leaf hash for primary condition `{}`",
-                primary_id
-            ))
-        })?;
+    if let Some(leaf_hash) = primary_leaf_hash {
         leaves.push(TaprootLeafInfo {
             leaf_hash,
             spending_condition_id: primary_id.to_string(),
@@ -116,6 +113,83 @@ pub fn extract(
     })
 }
 
+/// Selector of the primary path of a SegWit v0 policy.
+pub const SEGWIT_PRIMARY_SELECTOR: &str = "primary";
+
+/// Selector of the recovery path of a SegWit v0 policy that opens after
+/// `timelock` blocks.
+pub fn segwit_recovery_selector(timelock: u16) -> String {
+    format!("older:{}", timelock)
+}
+
+fn segwit_metadata(
+    primary_id: &str,
+    primary: &PolicyPath,
+    recoveries: &[RecoveryPath],
+) -> TaprootMetadata {
+    let mut leaves = vec![TaprootLeafInfo {
+        leaf_hash: SEGWIT_PRIMARY_SELECTOR.to_string(),
+        spending_condition_id: primary_id.to_string(),
+        script_path: Vec::new(),
+        timelock: None,
+        policy_type: policy_path_kind(primary),
+        threshold: policy_path_threshold(primary),
+        description: format_description("Primary", primary, None),
+    }];
+    leaves.extend(
+        recoveries
+            .iter()
+            .map(|recovery| recovery_leaf(recovery, segwit_recovery_selector(recovery.timelock))),
+    );
+    TaprootMetadata {
+        leaves,
+        internal_key: None,
+        merkle_root: None,
+    }
+}
+
+fn recovery_leaf(recovery: &RecoveryPath, leaf_hash: String) -> TaprootLeafInfo {
+    TaprootLeafInfo {
+        leaf_hash,
+        spending_condition_id: recovery.id.clone(),
+        script_path: Vec::new(),
+        timelock: Some(recovery.timelock),
+        policy_type: policy_path_kind(&recovery.path),
+        threshold: policy_path_threshold(&recovery.path),
+        description: format_description("Recovery", &recovery.path, Some(recovery.timelock)),
+    }
+}
+
+/// The leaf holding exactly this path's keys behind this timelock.
+fn leaf_for<'a>(
+    tree: &'a TapTree,
+    path: &PolicyPath,
+    timelock: Option<u16>,
+) -> Option<&'a TapLeaf> {
+    let wanted = key_set(path.keys().into_iter());
+    tree.leaves
+        .iter()
+        .find(|leaf| leaf.timelock == timelock && key_set(leaf.keys.iter()) == wanted)
+}
+
+/// Whether the path is one key as the internal key plus one untimelocked
+/// single-key leaf for each of its other keys: how the compiler lays out
+/// a 1-of-n primary.
+fn spread_over_key_path(tree: &TapTree, path: &PolicyPath) -> bool {
+    let keys = path.keys();
+    keys.contains(&&tree.internal_key)
+        && keys.iter().all(|key| {
+            *key == &tree.internal_key
+                || tree.leaves.iter().any(|leaf| {
+                    leaf.timelock.is_none() && leaf.keys.len() == 1 && &leaf.keys[0] == *key
+                })
+        })
+}
+
+fn key_set<'a>(keys: impl Iterator<Item = &'a DescriptorPublicKey>) -> BTreeSet<String> {
+    keys.map(|key| key.to_string()).collect()
+}
+
 fn populate_dummy_psbt_input(descriptor: &LianaDescriptor) -> Result<PsbtInput, PolicyError> {
     let secp = Secp256k1::verification_only();
     let child = ChildNumber::from_normal_idx(0).map_err(|e| {
@@ -126,54 +200,6 @@ fn populate_dummy_psbt_input(descriptor: &LianaDescriptor) -> Result<PsbtInput, 
     let mut psbt_input = PsbtInput::default();
     derived.update_psbt_in(&mut psbt_input);
     Ok(psbt_input)
-}
-
-fn collect_leaves_by_fingerprint(psbt_input: &PsbtInput) -> HashMap<Fingerprint, HashSet<String>> {
-    let mut map: HashMap<Fingerprint, HashSet<String>> = HashMap::new();
-    for (leaf_hashes, (fp, _path)) in psbt_input.tap_key_origins.values() {
-        let entry = map.entry(*fp).or_default();
-        for lh in leaf_hashes {
-            entry.insert(hex::encode(lh.to_byte_array()));
-        }
-    }
-    map
-}
-
-fn leaf_hash_for_path(
-    path: &PolicyPath,
-    fp_to_leaves: &HashMap<Fingerprint, HashSet<String>>,
-) -> Option<String> {
-    let fingerprints = path_fingerprints(path);
-    let mut intersection: Option<HashSet<String>> = None;
-
-    for fp in &fingerprints {
-        let Some(hashes) = fp_to_leaves.get(fp) else {
-            continue;
-        };
-        intersection = Some(match intersection {
-            None => hashes.clone(),
-            Some(prev) => prev.intersection(hashes).cloned().collect(),
-        });
-    }
-
-    intersection.and_then(|set| set.into_iter().min())
-}
-
-fn path_fingerprints(path: &PolicyPath) -> Vec<Fingerprint> {
-    use std::str::FromStr;
-
-    fn fp_of(key: &miniscript::descriptor::DescriptorPublicKey) -> Option<Fingerprint> {
-        let key_str = key.to_string();
-        let bracket_end = key_str.find(']')?;
-        let inside = &key_str[1..bracket_end];
-        let fp_str = inside.split('/').next()?;
-        Fingerprint::from_str(fp_str).ok()
-    }
-
-    match path {
-        PolicyPath::Single(k) => fp_of(k).into_iter().collect(),
-        PolicyPath::Multi { keys, .. } => keys.iter().filter_map(fp_of).collect(),
-    }
 }
 
 fn policy_path_kind(path: &PolicyPath) -> PolicyType {
@@ -198,7 +224,12 @@ fn primary_keypath_leaf(primary: &PolicyPath, primary_id: &str) -> TaprootLeafIn
         timelock: None,
         policy_type: policy_path_kind(primary),
         threshold: policy_path_threshold(primary),
-        description: "Primary spending path (key path - immediate access)".to_string(),
+        description: match primary {
+            PolicyPath::Single(_) => {
+                "Primary spending path (key path - immediate access)".to_string()
+            }
+            PolicyPath::Multi { .. } => format_description("Primary", primary, None),
+        },
     }
 }
 

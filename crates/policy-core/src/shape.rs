@@ -52,10 +52,17 @@ pub enum WalletShape {
         threshold: usize,
         keys: Vec<DescriptorPublicKey>,
     },
-    /// Timelocked policy with a primary spending path and zero-or-more
-    /// time-locked recovery paths. Always taproot (P2WSH variant unsupported
-    /// here; SegwitV0 callers are rejected at classify time).
+    /// Timelocked policy with a primary spending path and one or more
+    /// time-locked recovery paths, compiled to taproot.
     TimelockedPolicy {
+        primary_id: String,
+        primary: PolicyPath,
+        recoveries: Vec<RecoveryPath>,
+    },
+    /// The same policy as `TimelockedPolicy`, compiled to P2WSH for
+    /// signers that cannot spend taproot script paths. Has no unspendable
+    /// primary: there is no internal key to replace.
+    SegwitTimelockedPolicy {
         primary_id: String,
         primary: PolicyPath,
         recoveries: Vec<RecoveryPath>,
@@ -74,12 +81,24 @@ pub enum WalletShape {
 /// 2. Single-condition fast path: one primary, zero timelock → either a single
 ///    sig wallet or a flat k-of-n multisig (any `1 <= k <= n`, `n >= 2`) in
 ///    the requested script kind.
-/// 3. Otherwise: a timelocked taproot policy. P2WSH (SegwitV0) is not supported
-///    for timelocked policies in this build.
+/// 3. Otherwise: a timelocked policy, taproot unless SegWit v0 was asked
+///    for.
+///
+/// A device may appear in more than one condition (never twice in the
+/// same one). Each further use gets the next multipath step of its xpub,
+/// `<2;3>`, `<4;5>`, …, so every condition holds a distinct key, which
+/// is how a decaying multisig over one set of signers is expressed.
 pub fn classify(spec: &WalletSpec) -> Result<WalletShape, PolicyError> {
-    let resolved = resolve_conditions(spec)?;
+    let (resolved, reuses_keys) = resolve_conditions(spec)?;
 
     if can_combine_taproot_multisig(spec, &resolved) {
+        if reuses_keys {
+            return Err(PolicyError::InvalidPolicy(
+                "A key can only be used in more than one condition when the recovery \
+                 conditions are timelocked"
+                    .to_string(),
+            ));
+        }
         return Ok(combine_taproot_multisig(&resolved));
     }
 
@@ -87,14 +106,29 @@ pub fn classify(spec: &WalletSpec) -> Result<WalletShape, PolicyError> {
         return Ok(shape);
     }
 
-    if spec.preferred_script_type == PreferredScriptType::SegwitV0 {
+    let segwit = spec.preferred_script_type == PreferredScriptType::SegwitV0;
+    if segwit && resolved.iter().any(|c| c.is_unspendable) {
         return Err(PolicyError::InvalidPolicy(
-            "SegWit v0 is not supported for policy-based wallets with timelocks".to_string(),
+            "An unspendable primary requires taproot; SegWit v0 has no internal key to replace"
+                .to_string(),
         ));
     }
 
-    build_timelocked_policy(resolved, spec.network)
+    match build_timelocked_policy(resolved, spec.network)? {
+        WalletShape::TimelockedPolicy {
+            primary_id,
+            primary,
+            recoveries,
+        } if segwit => Ok(WalletShape::SegwitTimelockedPolicy {
+            primary_id,
+            primary,
+            recoveries,
+        }),
+        shape => Ok(shape),
+    }
 }
+
+const FIRST_MULTIPATH_STEP: &str = "/<0;1>/*";
 
 struct ResolvedCondition {
     id: String,
@@ -108,16 +142,23 @@ struct ResolvedCondition {
     path: Option<PolicyPath>,
 }
 
-fn resolve_conditions(spec: &WalletSpec) -> Result<Vec<ResolvedCondition>, PolicyError> {
-    spec.conditions
+/// Resolve every condition's keys. The flag says whether any device is
+/// used by more than one condition.
+fn resolve_conditions(spec: &WalletSpec) -> Result<(Vec<ResolvedCondition>, bool), PolicyError> {
+    let mut uses: BTreeMap<String, u32> = BTreeMap::new();
+    let resolved = spec
+        .conditions
         .iter()
-        .map(|cond| resolve_condition(cond, &spec.managed_keys))
-        .collect()
+        .map(|cond| resolve_condition(cond, &spec.managed_keys, &mut uses))
+        .collect::<Result<Vec<_>, _>>()?;
+    let reuses_keys = uses.values().any(|count| *count > 1);
+    Ok((resolved, reuses_keys))
 }
 
 fn resolve_condition(
     cond: &SpendingCondition,
     managed_keys: &BTreeMap<String, ManagedKey>,
+    uses: &mut BTreeMap<String, u32>,
 ) -> Result<ResolvedCondition, PolicyError> {
     if cond.is_unspendable {
         return Ok(ResolvedCondition {
@@ -128,16 +169,31 @@ fn resolve_condition(
             path: None,
         });
     }
+    for (idx, id) in cond.managed_key_ids.iter().enumerate() {
+        if cond.managed_key_ids[..idx].contains(id) {
+            return Err(PolicyError::InvalidPolicy(format!(
+                "Condition '{}' lists device {} more than once",
+                cond.id, id
+            )));
+        }
+    }
+    let mut next_key = |id: &String| {
+        let nth_use = uses.entry(id.clone()).or_insert(0);
+        let key = resolve_key(managed_keys, id, *nth_use);
+        *nth_use += 1;
+        key
+    };
     let path = match cond.policy {
-        PolicyType::Single => {
-            let key = resolve_key(managed_keys, &cond.managed_key_ids[0])?;
-            PolicyPath::Single(key)
+        PolicyType::Single => PolicyPath::Single(next_key(&cond.managed_key_ids[0])?),
+        // A 1-of-1 "multi" is a single key.
+        PolicyType::Multi if cond.managed_key_ids.len() == 1 => {
+            PolicyPath::Single(next_key(&cond.managed_key_ids[0])?)
         }
         PolicyType::Multi => {
             let keys = cond
                 .managed_key_ids
                 .iter()
-                .map(|id| resolve_key(managed_keys, id))
+                .map(&mut next_key)
                 .collect::<Result<Vec<_>, _>>()?;
             PolicyPath::Multi {
                 threshold: cond.threshold,
@@ -154,9 +210,13 @@ fn resolve_condition(
     })
 }
 
+/// `nth_use` counts the conditions that already hold this device's key:
+/// use 0 keeps the stored `<0;1>` multipath step, use `n` moves to
+/// `<2n;2n+1>`.
 fn resolve_key(
     managed_keys: &BTreeMap<String, ManagedKey>,
     device_id: &str,
+    nth_use: u32,
 ) -> Result<DescriptorPublicKey, PolicyError> {
     let key = managed_keys.get(device_id).ok_or_else(|| {
         PolicyError::KeyManagement(format!("Key not found for device {}", device_id))
@@ -164,6 +224,17 @@ fn resolve_key(
 
     let xpub_str = key.tpub.as_deref().unwrap_or(&key.xpub);
     let xpub_str = ensure_key_origin_has_path(xpub_str, &key.fingerprint, &key.derivation_path);
+    let xpub_str = if nth_use == 0 {
+        xpub_str
+    } else {
+        let base = xpub_str.strip_suffix(FIRST_MULTIPATH_STEP).ok_or_else(|| {
+            PolicyError::KeyManagement(format!(
+                "Device {} is used by more than one condition, which needs a key ending in {}",
+                device_id, FIRST_MULTIPATH_STEP
+            ))
+        })?;
+        format!("{}/<{};{}>/*", base, 2 * nth_use, 2 * nth_use + 1)
+    };
 
     DescriptorPublicKey::from_str(&xpub_str)
         .map_err(|e| PolicyError::KeyManagement(format!("Invalid xpub: {}", e)))
@@ -386,18 +457,6 @@ fn build_timelocked_policy(
         }
     };
 
-    // A 1-of-n primary compiles to one taproot branch per key (one of
-    // them the internal key), so no single leaf stands for the condition
-    // and it cannot be addressed when spending.
-    if let PolicyPath::Multi { threshold: 1, keys } = &primary_path {
-        if keys.len() > 1 {
-            return Err(PolicyError::InvalidPolicy(format!(
-                "A 1-of-{} primary cannot be combined with timelocked recovery paths",
-                keys.len()
-            )));
-        }
-    }
-
     for (idx, rec) in recoveries.iter_mut().enumerate() {
         if rec.timelock == 0 {
             rec.timelock = 144 + (idx as u16) * 144;
@@ -411,7 +470,8 @@ fn build_timelocked_policy(
         .find(|w| w[0].timelock == w[1].timelock)
     {
         return Err(PolicyError::InvalidPolicy(format!(
-            "Recovery conditions '{}' and '{}' share the {}-block timelock; each recovery needs its own",
+            "Recovery conditions '{}' and '{}' share the {}-block timelock; each recovery needs \
+             its own (a block apart is enough)",
             pair[0].id, pair[1].id, pair[0].timelock
         )));
     }

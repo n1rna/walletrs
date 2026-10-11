@@ -15,8 +15,8 @@
 //!
 //! The taptree's leaf order is chosen by the miniscript policy compiler,
 //! not by timelock. BDK lists the leaves as policy children in that same
-//! order, so `taptree_leaves` is how a spending path is mapped to its
-//! policy child for both variants.
+//! order, so `policy_core::TapTree` is how a spending path is mapped to
+//! its policy child for both variants.
 
 use std::str::FromStr;
 
@@ -26,7 +26,7 @@ use bdk_wallet::bitcoin::taproot::{LeafVersion, TapLeafHash};
 use liana::descriptors::{LianaDescriptor, PathInfo};
 use liana::miniscript::descriptor::{Descriptor, DescriptorPublicKey};
 use liana::miniscript::policy::Liftable;
-use policy_core::BIP341_NUMS_HEX;
+use policy_core::{TapTree, BIP341_NUMS_HEX};
 
 use crate::error::WalletRuntimeError;
 
@@ -163,58 +163,10 @@ fn is_unspendable(key: &DescriptorPublicKey) -> bool {
     matches!(key, DescriptorPublicKey::MultiXPub(k) if k.xkey.public_key == nums)
 }
 
-/// One script leaf of a stored taproot policy descriptor.
-pub(crate) struct TapLeaf {
-    pub leaf_hash: String,
-    /// Relative timelock the leaf enforces; `None` for a primary leaf.
-    pub timelock: Option<u16>,
-}
-
-impl TapLeaf {
-    /// BDK lists the key spend as policy child 0 and the leaves after it.
-    pub fn policy_child_index(leaves: &[TapLeaf], leaf_hash: &str) -> Option<usize> {
-        leaves
-            .iter()
-            .position(|leaf| leaf.leaf_hash.eq_ignore_ascii_case(leaf_hash))
-            .map(|idx| idx + 1)
-    }
-}
-
-/// Leaves of a multipath taproot descriptor in taptree order. `None` when
-/// the descriptor is not taproot.
-pub(crate) fn taptree_leaves(descriptor: &str) -> Result<Option<Vec<TapLeaf>>, WalletRuntimeError> {
-    let desc = Descriptor::<DescriptorPublicKey>::from_str(descriptor)
-        .map_err(|e| WalletRuntimeError::InvalidDescriptor(e.to_string()))?;
-    let tr = match &desc {
-        Descriptor::Tr(tr) => tr,
-        _ => return Ok(None),
-    };
-    let derived = derive_receive(&desc)?;
-    let derived_tr = match &derived {
-        Descriptor::Tr(tr) => tr,
-        _ => return Ok(None),
-    };
-
-    let mut leaves = Vec::new();
-    for ((_, ms), (_, derived_ms)) in tr.iter_scripts().zip(derived_tr.iter_scripts()) {
-        let policy = ms
-            .lift()
-            .map_err(|e| WalletRuntimeError::InvalidDescriptor(e.to_string()))?;
-        let timelock = match policy.relative_timelocks().first() {
-            Some(blocks) => Some(u16::try_from(*blocks).map_err(|_| {
-                WalletRuntimeError::InvalidDescriptor(format!(
-                    "timelock of {} blocks is out of range",
-                    blocks
-                ))
-            })?),
-            None => None,
-        };
-        leaves.push(TapLeaf {
-            leaf_hash: leaf_hash(derived_ms),
-            timelock,
-        });
-    }
-    Ok(Some(leaves))
+/// Taptree of a stored multipath policy descriptor; `None` when it is
+/// not taproot.
+pub(crate) fn taptree(descriptor: &str) -> Result<Option<TapTree>, WalletRuntimeError> {
+    TapTree::parse(descriptor).map_err(|e| WalletRuntimeError::InvalidDescriptor(e.to_string()))
 }
 
 /// Leaf hashes do not depend on the derivation index, but computing them

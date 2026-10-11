@@ -14,10 +14,15 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
+use bdk_wallet::bitcoin::Network;
+use bdk_wallet::descriptor::policy::Policy;
+use bdk_wallet::{KeychainKind, Wallet};
 use liana::descriptors::LianaDescriptor;
+use policy_core::TapTree;
 
 use crate::error::WalletRuntimeError;
-use crate::policy_descriptor::{taptree_leaves, PolicyDescriptor, RecoveryOnlyDescriptor};
+use crate::policy_descriptor::{taptree, PolicyDescriptor, RecoveryOnlyDescriptor};
+use crate::policy_path::policy_path_enforcing;
 
 /// One spending option for the user. Single-sig and multisig
 /// descriptors emit a single path; timelocked-policy descriptors emit
@@ -145,23 +150,8 @@ fn timelocked_paths(
     let policy = desc.policy();
     let mut out = Vec::new();
 
-    // BDK policy child of the path enforcing `timelock` (`None` is the
-    // primary). Taproot leaves sit in the order the policy compiler chose,
-    // after the key spend at child 0; a primary with no leaf of its own
-    // is the key spend.
-    let leaves = taptree_leaves(&desc.to_string())?;
-    let child_index = |timelock: Option<u16>, recovery_idx: usize| match &leaves {
-        Some(leaves) => match leaves.iter().position(|leaf| leaf.timelock == timelock) {
-            Some(position) => Ok(position + 1),
-            None if timelock.is_none() => Ok(0),
-            None => Err(WalletRuntimeError::PolicyPath(format!(
-                "no taproot leaf enforces the {}-block recovery timelock",
-                timelock.unwrap_or_default()
-            ))),
-        },
-        None => Ok(timelock.map_or(0, |_| recovery_idx + 1)),
-    };
-    let primary_child = child_index(None, 0)?;
+    let paths = PolicyPaths::new(desc, external_policy_id)?;
+    let primary_policy_path = paths.enforcing(None)?;
 
     // Primary path.
     let (p_thresh, p_origins) = policy.primary_path().thresh_origins();
@@ -177,16 +167,12 @@ fn timelocked_paths(
         threshold: p_thresh as u32,
         fingerprints: p_fps,
         timelock_blocks: None,
-        policy_path: external_policy_id.map(|id| {
-            let mut m = BTreeMap::new();
-            m.insert(id.to_string(), vec![primary_child]);
-            m
-        }),
+        policy_path: primary_policy_path,
     });
 
     // Recovery paths in ascending-timelock order.
     for (idx, (timelock, path_info)) in policy.recovery_paths().iter().enumerate() {
-        let recovery_child = child_index(Some(*timelock), idx)?;
+        let recovery_policy_path = paths.enforcing(Some(*timelock))?;
         let (thresh, origins) = path_info.thresh_origins();
         let fps: Vec<String> = origins.keys().map(|fp| fp.to_string()).collect();
         let blocks = *timelock as u32;
@@ -211,15 +197,96 @@ fn timelocked_paths(
             threshold: thresh as u32,
             fingerprints: fps,
             timelock_blocks: Some(blocks),
-            policy_path: external_policy_id.map(|id| {
-                let mut m = BTreeMap::new();
-                m.insert(id.to_string(), vec![recovery_child]);
-                m
-            }),
+            policy_path: recovery_policy_path,
         });
     }
 
     Ok(out)
+}
+
+/// Maps each path of a Liana policy, identified by the relative timelock
+/// it enforces (`None` is the primary), to its BDK policy path.
+enum PolicyPaths {
+    /// Leaves sit in the order the policy compiler chose, after the key
+    /// spend at child 0. The primary is the key spend whenever the
+    /// internal key is a real key: that covers a single-key primary and a
+    /// 1-of-n one, whose other keys each have their own leaf.
+    Taproot {
+        tree: TapTree,
+        external_policy_id: Option<String>,
+    },
+    /// No leaves: BDK mirrors the script, so the path is found in the
+    /// policy tree of a throwaway wallet over the same descriptor.
+    Segwit(Policy),
+}
+
+impl PolicyPaths {
+    fn new(
+        desc: &LianaDescriptor,
+        external_policy_id: Option<&str>,
+    ) -> Result<Self, WalletRuntimeError> {
+        if let Some(tree) = taptree(&desc.to_string())? {
+            return Ok(Self::Taproot {
+                tree,
+                external_policy_id: external_policy_id.map(str::to_string),
+            });
+        }
+        // Only the network kind has to match the keys.
+        let wallet = [Network::Bitcoin, Network::Testnet]
+            .into_iter()
+            .find_map(|network| {
+                Wallet::create(
+                    desc.receive_descriptor().to_string(),
+                    desc.change_descriptor().to_string(),
+                )
+                .network(network)
+                .create_wallet_no_persist()
+                .ok()
+            })
+            .ok_or_else(|| {
+                WalletRuntimeError::PolicyPath("policy descriptor does not load".to_string())
+            })?;
+        wallet
+            .policies(KeychainKind::External)
+            .map_err(|e| WalletRuntimeError::PolicyPath(format!("get policies: {}", e)))?
+            .map(Self::Segwit)
+            .ok_or_else(|| WalletRuntimeError::PolicyPath("no external policy".to_string()))
+    }
+
+    fn enforcing(
+        &self,
+        timelock: Option<u16>,
+    ) -> Result<Option<BTreeMap<String, Vec<usize>>>, WalletRuntimeError> {
+        let missing = || {
+            WalletRuntimeError::PolicyPath(match timelock {
+                Some(blocks) => format!("no spending path enforces a {}-block timelock", blocks),
+                None => "no spending path is free of a timelock".to_string(),
+            })
+        };
+        match self {
+            Self::Taproot {
+                tree,
+                external_policy_id,
+            } => {
+                let leaf = tree
+                    .leaves
+                    .iter()
+                    .position(|leaf| leaf.timelock == timelock);
+                let child = match (timelock, leaf) {
+                    (None, _) if tree.has_spendable_key_path() => 0,
+                    (_, Some(position)) => position + 1,
+                    (None, None) => 0,
+                    (Some(_), None) => return Err(missing()),
+                };
+                Ok(external_policy_id
+                    .as_ref()
+                    .map(|id| BTreeMap::from([(id.clone(), vec![child])])))
+            }
+            Self::Segwit(policy) => policy_path_enforcing(policy, timelock)
+                .map(Some)
+                .ok_or_else(missing),
+        }
+    }
 }
 
 /// Recovery-only wallets have no primary path to offer: one entry per

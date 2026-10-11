@@ -23,6 +23,7 @@ pub mod managed_key;
 pub mod shape;
 pub mod spec;
 pub mod taproot;
+pub mod taptree;
 
 #[cfg(test)]
 mod tests;
@@ -34,3 +35,4 @@ pub use managed_key::ManagedKey;
 pub use shape::{classify, PolicyPath, RecoveryPath, ScriptKind, WalletShape};
 pub use spec::{PolicyType, PreferredScriptType, SpendingCondition, WalletSpec};
 pub use taproot::{TaprootLeafInfo, TaprootMetadata};
+pub use taptree::{TapLeaf, TapTree};
