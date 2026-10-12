@@ -63,6 +63,9 @@ fn make_test_backend() -> Option<(S3Backend, String)> {
         force_path_style: env::var("WALLETRS_TEST_S3_FORCE_PATH_STYLE")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(true),
+        attempt_timeout: std::time::Duration::from_secs(
+            walletrs_lib::config::DEFAULT_S3_ATTEMPT_TIMEOUT_SECS,
+        ),
     };
 
     let backend = S3Backend::from_config(&cfg).expect("failed to build S3Backend");

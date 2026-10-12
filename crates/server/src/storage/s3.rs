@@ -1,7 +1,10 @@
 use std::io;
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::Duration;
 
+use aws_config::retry::RetryConfig;
+use aws_config::timeout::TimeoutConfig;
 use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::Credentials;
 use aws_sdk_s3::config::{RequestChecksumCalculation, ResponseChecksumValidation};
@@ -59,6 +62,9 @@ where
     });
     rx.recv().expect("S3 task was dropped")
 }
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_ATTEMPTS: u32 = 3;
 
 #[derive(Clone)]
 pub struct S3Backend {
@@ -252,7 +258,21 @@ async fn build_client(cfg: S3Config) -> Client {
     // out, but as of aws-sdk-s3 1.103 it doesn't fully suppress the
     // header in all code paths — pinning the behavior version is the
     // reliable workaround.
-    let loader = aws_config::defaults(BehaviorVersion::v2026_01_12()).region(region);
+    //
+    // The SDK only bounds connection setup by default. A connection that
+    // is accepted and then goes quiet would hold a request until TCP gives
+    // up, minutes later, and with it the RPC that is waiting on storage.
+    // Bound each attempt so a stalled one is retried on a fresh connection,
+    // and the whole operation so the caller gets an error in the end.
+    let timeouts = TimeoutConfig::builder()
+        .connect_timeout(cfg.attempt_timeout.min(CONNECT_TIMEOUT))
+        .operation_attempt_timeout(cfg.attempt_timeout)
+        .operation_timeout(cfg.attempt_timeout * (MAX_ATTEMPTS + 1))
+        .build();
+    let loader = aws_config::defaults(BehaviorVersion::v2026_01_12())
+        .region(region)
+        .timeout_config(timeouts)
+        .retry_config(RetryConfig::standard().with_max_attempts(MAX_ATTEMPTS));
     let loader = match (&cfg.access_key_id, &cfg.secret_access_key) {
         (Some(id), Some(secret)) => loader.credentials_provider(Credentials::new(
             id.clone(),
@@ -309,4 +329,55 @@ where
     }
 
     StorageError::Io(io::Error::other(format!("s3 {}: {}", op, detail)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    /// An endpoint that accepts connections and then never answers: how a
+    /// storage provider looks when a connection stalls.
+    fn silent_endpoint() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let endpoint = format!("http://{}", listener.local_addr().expect("addr"));
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming().flatten() {
+                held.push(stream);
+            }
+        });
+        endpoint
+    }
+
+    #[test]
+    fn stalled_storage_request_fails_instead_of_hanging() {
+        let backend = S3Backend::from_config(&S3Config {
+            endpoint: Some(silent_endpoint()),
+            bucket: "bucket".to_string(),
+            region: "auto".to_string(),
+            access_key_id: Some("id".to_string()),
+            secret_access_key: Some("secret".to_string()),
+            prefix: String::new(),
+            force_path_style: true,
+            attempt_timeout: Duration::from_millis(300),
+        })
+        .expect("backend");
+
+        let started = Instant::now();
+        let read = backend.read_bytes("global/anything.json");
+        let write = backend.write_bytes("global/anything.json", b"{}");
+        let elapsed = started.elapsed();
+
+        assert!(read.is_err(), "a stalled read must surface as an error");
+        assert!(write.is_err(), "a stalled write must surface as an error");
+        // Each call is bounded by attempts x timeout plus backoff; without
+        // the timeouts this test does not return at all.
+        assert!(
+            elapsed < Duration::from_secs(20),
+            "stalled requests took {:?}",
+            elapsed
+        );
+    }
 }
