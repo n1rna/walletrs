@@ -82,6 +82,7 @@ Every knob is an environment variable; there is no config file.
 | `WALLETRS_S3_SECRET_ACCESS_KEY` | — | s3 | |
 | `WALLETRS_S3_PREFIX` | — | s3 | object-key namespace inside the bucket |
 | `WALLETRS_S3_FORCE_PATH_STYLE` | `true` | s3 | required for MinIO; safe for R2 |
+| `WALLETRS_S3_ATTEMPT_TIMEOUT_SECS` | `15` | s3 | how long one attempt at a storage request may take before it is retried; a request fails after three attempts |
 | `WALLETRS_KEK` | — | system-keys | base64 32-byte envelope KEK |
 | `WALLETRS_AUTH_TOKEN` | — | optional | bearer token for gRPC + HTTP; auto-generated when unset |
 | `WALLETRS_AUTH_DISABLED` | `0` | optional | disables auth on both surfaces |

@@ -4,6 +4,10 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [Unreleased]
 
+### Fixed
+
+- **A stalled storage connection no longer holds an RPC for minutes.** The S3 client only bounded connection setup. When the storage provider accepted a connection and then went quiet, the request waited until TCP gave up; one `CreateCustomerManagedKey` call took 173 seconds this way. Each attempt is now limited to `WALLETRS_S3_ATTEMPT_TIMEOUT_SECS` (default 15) and retried on a fresh connection, and the request fails after three attempts.
+
 ## [0.7.0] - 2026-10-11
 
 ### Added

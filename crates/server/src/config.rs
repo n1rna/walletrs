@@ -2,12 +2,15 @@ use bdk_wallet::bitcoin::Network;
 use once_cell::sync::Lazy;
 use std::env;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageKind {
     Local,
     S3,
 }
+
+pub const DEFAULT_S3_ATTEMPT_TIMEOUT_SECS: u64 = 15;
 
 #[derive(Debug, Clone)]
 pub struct S3Config {
@@ -18,6 +21,9 @@ pub struct S3Config {
     pub secret_access_key: Option<String>,
     pub prefix: String,
     pub force_path_style: bool,
+    /// How long one attempt at a storage request may take before it is
+    /// abandoned and retried.
+    pub attempt_timeout: Duration,
 }
 
 pub struct Config {
@@ -57,6 +63,13 @@ impl Config {
                 force_path_style: env::var("WALLETRS_S3_FORCE_PATH_STYLE")
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                     .unwrap_or(true),
+                attempt_timeout: Duration::from_secs(
+                    env::var("WALLETRS_S3_ATTEMPT_TIMEOUT_SECS")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .filter(|secs| *secs > 0)
+                        .unwrap_or(DEFAULT_S3_ATTEMPT_TIMEOUT_SECS),
+                ),
             })
         } else {
             None
