@@ -4,6 +4,8 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-12
+
 ### Fixed
 
 - **A stalled storage connection no longer holds an RPC for minutes.** The S3 client only bounded connection setup. When the storage provider accepted a connection and then went quiet, the request waited until TCP gave up; one `CreateCustomerManagedKey` call took 173 seconds this way. Each attempt is now limited to `WALLETRS_S3_ATTEMPT_TIMEOUT_SECS` (default 15) and retried on a fresh connection, and the request fails after three attempts.
@@ -125,6 +127,7 @@ All notable changes to this project will be documented here. The format follows 
 - Repository extracted from the `sigvault` monorepo. Cargo workspace at the root with `crates/server` (the gRPC binary + library) and `contrib/liana`. The proto contract lives at `proto/walletrpc.proto` as the single source of truth.
 - License: BSD-3-Clause (single `LICENSE` file).
 
+[0.7.1]: https://github.com/n1rna/walletrs/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/n1rna/walletrs/compare/v0.6.3...v0.7.0
 [0.6.3]: https://github.com/n1rna/walletrs/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/n1rna/walletrs/compare/v0.6.1...v0.6.2
